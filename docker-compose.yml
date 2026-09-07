@@ -1,0 +1,62 @@
+services:
+
+  dall-m-db:
+    container_name: dall-m-db
+    image: postgres:18
+    restart: unless-stopped
+    ports:
+      - "5497:5432"
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - ./data/databasepg:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U admin -d ${DB_NAME}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - dall-m-net
+
+  dall-m-server:
+    container_name: dall-m-server
+    build:
+      context: ./server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      DB_HOST: dall-m-db
+      DB_PORT: 5432
+      DB_USER: ${DB_USER}
+      DB_PASSWORD: ${DB_PASSWORD}
+      DB_NAME: ${DB_NAME}
+    depends_on:
+      dall-m-db:
+        condition: service_healthy
+    networks:
+      - dall-m-net
+
+  dall-m-llamacpp:
+    container_name: dall-m-llamacpp
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data/models:/models
+    environment:
+      LLAMA_CACHE: /models
+    command: >
+      -hf ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
+      --host 0.0.0.0
+      --port 8080
+    networks:
+      - dall-m-net
+
+
+networks:
+  dall-m-net:
+    driver: bridge

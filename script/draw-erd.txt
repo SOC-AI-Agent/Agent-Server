@@ -1,0 +1,276 @@
+Project LLM_Server {
+  database_type: 'PostgreSQL'
+}
+
+
+// ========================================
+// USERS
+// ========================================
+
+Table users {
+  id uuid [pk]
+
+  username varchar(100) [unique, not null]
+  email varchar(255) [unique, not null]
+  password varchar(255)
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+
+  indexes {
+    username [unique]
+    email [unique]
+  }
+}
+
+
+// ========================================
+// LLM MODELS
+// ========================================
+
+Table llm_models {
+  id uuid [pk]
+
+  name varchar(100) [not null]
+
+  // Example:
+  // llama3.1:8b
+  // qwen3:8b
+  // mistral:7b
+  model_name varchar(255) [not null]
+
+  // Example:
+  // ollama
+  // vllm
+  // llama.cpp
+  // openai-compatible
+  provider varchar(100)
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+
+  indexes {
+    model_name
+    provider
+  }
+}
+
+
+// ========================================
+// AGENTS
+// ========================================
+
+Table agents {
+  id uuid [pk]
+
+  // Public API identifier
+  // Example: customer-support
+  slug varchar(100) [unique, not null]
+
+  name varchar(255) [not null]
+  description text
+
+  owner_id uuid [not null]
+
+  // Model used by this agent
+  model_id uuid
+
+  is_active boolean [not null, default: true]
+
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+
+  indexes {
+    slug [unique]
+    owner_id
+    model_id
+  }
+}
+
+
+// ========================================
+// AGENT PROMPTS
+// ========================================
+
+Table agent_prompts {
+  id uuid [pk]
+
+  agent_id uuid [not null]
+
+  // Prompt version
+  version int [not null]
+
+  system_prompt text [not null]
+
+  is_active boolean [not null, default: false]
+
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+
+  indexes {
+    agent_id
+    (agent_id, version) [unique]
+    (agent_id, is_active)
+  }
+}
+
+
+// ========================================
+// AGENT GENERATION CONFIG
+// ========================================
+
+Table agent_configs {
+  id uuid [pk]
+
+  agent_id uuid [unique, not null]
+
+  // ==============================
+  // Generation Parameters
+  // ==============================
+
+  // 0.0 - 2.0
+  temperature decimal(4,3) [default: 0.700]
+
+  // Maximum tokens generated
+  max_tokens int
+
+  // Probability sampling
+  // 0.0 - 1.0
+  top_p decimal(4,3)
+
+  // Top-K sampling
+  top_k int
+
+  // ==============================
+  // Context
+  // ==============================
+
+  // Maximum context window
+  context_window int
+
+  // ==============================
+  // Repetition
+  // ==============================
+
+  repetition_penalty decimal(4,3)
+
+  // ==============================
+  // Random Seed
+  // ==============================
+
+  seed int
+
+  // ==============================
+  // Response
+  // ==============================
+
+  streaming_enabled boolean [not null, default: true]
+
+  // ==============================
+  // Extra Model Parameters
+  // ==============================
+
+  // For model-specific parameters
+  //
+  // Example:
+  // {
+  //   "min_p": 0.05,
+  //   "repeat_last_n": 64
+  // }
+  extra_config json
+
+  created_at timestamp [not null, default: `now()`]
+  updated_at timestamp [not null, default: `now()`]
+}
+
+
+
+// ========================================
+// INFERENCE REQUESTS
+// ========================================
+
+Table inference_requests {
+  id uuid [pk]
+
+  agent_id uuid [not null]
+
+  // Exact prompt version used
+  prompt_id uuid [not null]
+
+  // Exact model used
+  model_id uuid
+
+  api_client_id uuid
+
+  // ==============================
+  // Request
+  // ==============================
+
+  user_prompt text [not null]
+
+  // ==============================
+  // Response
+  // ==============================
+
+  assistant_response text
+
+  // ==============================
+  // Token Usage
+  // ==============================
+
+  input_tokens int
+  output_tokens int
+  total_tokens int
+
+  // ==============================
+  // Performance
+  // ==============================
+
+  latency_ms int
+
+  // ==============================
+  // Status
+  // ==============================
+
+  status varchar(50) [not null]
+
+  error_message text
+
+  created_at timestamp [not null, default: `now()`]
+
+  indexes {
+    agent_id
+    prompt_id
+    model_id
+    api_client_id
+    created_at
+    status
+  }
+}
+
+
+// ========================================
+// RELATIONSHIPS
+// ========================================
+
+Ref: users.id < agents.owner_id
+
+Ref: llm_models.id < agents.model_id
+
+Ref: agents.id < agent_prompts.agent_id
+
+Ref: agents.id - agent_configs.agent_id
+
+// Ref: users.id < api_clients.user_id
+
+Ref: agents.id < inference_requests.agent_id
+
+Ref: agent_prompts.id < inference_requests.prompt_id
+
+Ref: llm_models.id < inference_requests.model_id
+
+// Ref: api_clients.id < inference_requests.api_client_id
