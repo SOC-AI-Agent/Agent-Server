@@ -33,8 +33,12 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
+      LLM_BASE_URL: http://dall-m-llamacpp:8080
+      LLAMA_HF_MODEL: ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
     depends_on:
       dall-m-db:
+        condition: service_healthy
+      dall-m-llamacpp:
         condition: service_healthy
     networks:
       - dall-m-net
