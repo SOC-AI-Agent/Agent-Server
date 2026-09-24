@@ -1,0 +1,88 @@
+// utils/apiClient.ts
+
+import { clearAuth, getToken } from './authToken';
+
+type RequestMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
+
+// Helper function to build query string from object
+function buildQueryString(params: Record<string, any>): string {
+  const query = Object.entries(params)
+    .filter(([_, value]) => value !== undefined && value !== null && value !== '')
+    .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+    .join('&');
+  return query ? `?${query}` : '';
+}
+
+export async function fetchDataApi(
+  method: string,
+  endpoint: string,
+  body: any = {},
+  extraHeaders: Record<string, string> = {},
+): Promise<any> {
+
+  const urls = process.env.NEXT_PUBLIC_BASE_URL;
+  const basePath = process.env.NEXT_PUBLIC_BASE_PATH;
+
+  let token: string | null = null;
+  token = getToken();
+
+  if (!urls) {
+    throw new Error('BACKEND_PATH environment variable is not set');
+  }
+
+  try {
+    let url = `${urls}${basePath}/${endpoint}`;
+
+    if (method === 'GET' && Object.keys(body).length > 0) {
+      url += buildQueryString(body);
+    }
+
+    const isFormData = body instanceof FormData;
+
+    const response = await fetch(url, {
+      method,
+      headers: {
+        ...(isFormData ? {} : { 'Content-Type': 'application/json' }),
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...extraHeaders,
+      },
+      body:
+        method !== 'GET'
+          ? isFormData
+            ? body
+            : JSON.stringify(body)
+          : undefined,
+    });
+
+    const text = await response.text();
+    let data: unknown = null;
+
+    if (text) {
+      try {
+        data = JSON.parse(text);
+      } catch {
+        console.error("Server response is not JSON:", text);
+        throw new Error(`Invalid JSON: ${text}`);
+      }
+    }
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        clearAuth();
+        if (typeof window !== 'undefined' && window.location.pathname !== '/login') {
+          window.location.href = '/login';
+        }
+      }
+
+      const detail = data as { detail?: string; message?: string } | null;
+      const message = detail?.detail || detail?.message || response.statusText;
+      throw new Error(message);
+    }
+
+    return data;
+
+  } catch (error) {
+    console.error('API call failed:', error);
+    throw error;
+  }
+}
