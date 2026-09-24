@@ -26,11 +26,12 @@ DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
 
 UPSERT_ADMIN_SQL = """
-    INSERT INTO users (username, email, password, is_active)
-    VALUES (%s, %s, %s, true)
+    INSERT INTO users (username, email, password, is_active, is_admin)
+    VALUES (%s, %s, %s, true, true)
     ON CONFLICT (username) DO UPDATE
         SET email = EXCLUDED.email,
             password = EXCLUDED.password,
+            is_admin = true,
             updated_at = now()
     RETURNING id;
 """

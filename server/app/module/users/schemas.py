@@ -10,6 +10,7 @@ class UserCreate(BaseModel):
     email: str
     password: Optional[str] = None
     is_active: bool = True
+    is_admin: bool = False
 
 
 class UserUpdate(BaseModel):
@@ -17,6 +18,7 @@ class UserUpdate(BaseModel):
     email: Optional[str] = None
     password: Optional[str] = None
     is_active: Optional[bool] = None
+    is_admin: Optional[bool] = None
 
 
 class UserOut(BaseModel):
@@ -24,5 +26,6 @@ class UserOut(BaseModel):
     username: str
     email: str
     is_active: bool
+    is_admin: bool
     created_at: datetime
     updated_at: datetime

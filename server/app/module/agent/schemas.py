@@ -47,6 +47,10 @@ class AgentPromptCreate(BaseModel):
     is_active: bool = False
 
 
+class AgentPromptUpdate(BaseModel):
+    system_prompt: str
+
+
 class AgentPromptOut(BaseModel):
     id: UUID
     agent_id: UUID
@@ -94,3 +98,22 @@ class AgentOut(BaseModel):
     is_active: bool
     created_at: datetime
     updated_at: datetime
+
+
+# ========================================
+# AGENT INVOCATION
+# ========================================
+
+class AgentChatRequest(BaseModel):
+    message: str
+    stream: bool = True
+
+
+class AgentChatResponse(BaseModel):
+    agent: str
+    prompt_version: int
+    content: str
+    input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    latency_ms: int

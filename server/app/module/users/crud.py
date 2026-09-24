@@ -4,7 +4,7 @@ from uuid import UUID
 from app.module.database.connection import get_cursor
 from app.module.users.schemas import UserCreate, UserUpdate
 
-RETURNING_COLUMNS = "id, username, email, is_active, created_at, updated_at"
+RETURNING_COLUMNS = "id, username, email, is_active, is_admin, created_at, updated_at"
 
 
 def list_users() -> list[dict]:
@@ -19,15 +19,25 @@ def get_user(user_id: UUID) -> Optional[dict]:
         return cur.fetchone()
 
 
+def get_user_by_username_with_password(username: str) -> Optional[dict]:
+    """Includes the password column — only for authenticating a login attempt."""
+    with get_cursor() as cur:
+        cur.execute(
+            f"SELECT password, {RETURNING_COLUMNS} FROM users WHERE username = %s;",
+            (username,),
+        )
+        return cur.fetchone()
+
+
 def create_user(data: UserCreate) -> dict:
     with get_cursor(commit=True) as cur:
         cur.execute(
             f"""
-            INSERT INTO users (username, email, password, is_active)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO users (username, email, password, is_active, is_admin)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING {RETURNING_COLUMNS};
             """,
-            (data.username, data.email, data.password, data.is_active),
+            (data.username, data.email, data.password, data.is_active, data.is_admin),
         )
         return cur.fetchone()
 

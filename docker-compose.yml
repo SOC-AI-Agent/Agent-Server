@@ -35,11 +35,36 @@ services:
       DB_NAME: ${DB_NAME}
       LLM_BASE_URL: http://dall-m-llamacpp:8080
       LLAMA_HF_MODEL: ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
+      JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
+      JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
     depends_on:
       dall-m-db:
         condition: service_healthy
       dall-m-llamacpp:
         condition: service_healthy
+    networks:
+      - dall-m-net
+
+  dall-m-frontend:
+    container_name: dall-m-frontend
+    build:
+      context: ./frontend
+    restart: unless-stopped
+    ports:
+      - "7100:7100"
+    environment:
+      # Reached from the browser on the host, so these stay as published host ports,
+      # not the in-network service names (the frontend has no server-side data fetching).
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_BASE_PATH: ${NEXT_PUBLIC_BASE_PATH:-/restful}
+      NEXT_PUBLIC_LLM_BASE_URL: ${NEXT_PUBLIC_LLM_BASE_URL:-http://localhost:8080}
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      - dall-m-server
     networks:
       - dall-m-net
 

@@ -47,11 +47,14 @@ STATEMENTS = [
         password varchar(255),
 
         is_active boolean NOT NULL DEFAULT true,
+        is_admin boolean NOT NULL DEFAULT false,
 
         created_at timestamp NOT NULL DEFAULT now(),
         updated_at timestamp NOT NULL DEFAULT now()
     );
     """,
+    # Safety net for databases created before is_admin existed.
+    'ALTER TABLE users ADD COLUMN IF NOT EXISTS is_admin boolean NOT NULL DEFAULT false;',
     'CREATE INDEX IF NOT EXISTS idx_users_username ON users (username);',
     'CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);',
 

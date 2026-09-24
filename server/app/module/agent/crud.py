@@ -5,7 +5,7 @@ import psycopg2.extras
 from psycopg2.extras import Json
 
 from app.module.database.connection import get_connection, get_cursor
-from app.module.agent.schemas import AgentConfigIn, AgentCreate, AgentPromptCreate, AgentUpdate
+from app.module.agent.schemas import AgentConfigIn, AgentCreate, AgentPromptCreate, AgentPromptUpdate, AgentUpdate
 
 AGENT_COLUMNS = "id, slug, name, description, owner_id, model_id, is_active, created_at, updated_at"
 PROMPT_COLUMNS = "id, agent_id, version, system_prompt, is_active, created_at, updated_at"
@@ -34,6 +34,12 @@ def list_agents(owner_id: Optional[UUID] = None) -> list[dict]:
 def get_agent(agent_id: UUID) -> Optional[dict]:
     with get_cursor() as cur:
         cur.execute(f"SELECT {AGENT_COLUMNS} FROM agents WHERE id = %s;", (str(agent_id),))
+        return cur.fetchone()
+
+
+def get_agent_by_slug(slug: str) -> Optional[dict]:
+    with get_cursor() as cur:
+        cur.execute(f"SELECT {AGENT_COLUMNS} FROM agents WHERE slug = %s;", (slug,))
         return cur.fetchone()
 
 
@@ -162,6 +168,21 @@ def create_prompt(agent_id: UUID, data: AgentPromptCreate) -> dict:
         conn.close()
 
 
+def update_prompt(agent_id: UUID, prompt_id: UUID, data: AgentPromptUpdate) -> Optional[dict]:
+    """Edit the text of an existing prompt version in place (does not touch version/is_active)."""
+    with get_cursor(commit=True) as cur:
+        cur.execute(
+            f"""
+            UPDATE agent_prompts
+            SET system_prompt = %s, updated_at = now()
+            WHERE id = %s AND agent_id = %s
+            RETURNING {PROMPT_COLUMNS};
+            """,
+            (data.system_prompt, str(prompt_id), str(agent_id)),
+        )
+        return cur.fetchone()
+
+
 def activate_prompt(agent_id: UUID, prompt_id: UUID) -> Optional[dict]:
     """Mark one prompt version active for the agent and deactivate every other version."""
     conn = get_connection()
@@ -192,6 +213,24 @@ def activate_prompt(agent_id: UUID, prompt_id: UUID) -> Optional[dict]:
         raise
     finally:
         conn.close()
+
+
+def get_active_prompt(agent_id: UUID) -> Optional[dict]:
+    with get_cursor() as cur:
+        cur.execute(
+            f"SELECT {PROMPT_COLUMNS} FROM agent_prompts WHERE agent_id = %s AND is_active = true;",
+            (str(agent_id),),
+        )
+        return cur.fetchone()
+
+
+def get_prompt_by_version(agent_id: UUID, version: int) -> Optional[dict]:
+    with get_cursor() as cur:
+        cur.execute(
+            f"SELECT {PROMPT_COLUMNS} FROM agent_prompts WHERE agent_id = %s AND version = %s;",
+            (str(agent_id), version),
+        )
+        return cur.fetchone()
 
 
 def delete_prompt(agent_id: UUID, prompt_id: UUID) -> bool:
