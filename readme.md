@@ -216,6 +216,34 @@ Alternatively, drop a `.gguf` file you already have into `./data/models` and
 edit the `command:` for `dall-m-llamacpp` in `docker-compose.yml` to use
 `-m /models/<your-file>.gguf` instead of `-hf`.
 
+### Preloading models
+
+`dall-m-model-preload` runs once, before `dall-m-llamacpp`, and downloads a
+fixed list of models into `./data/models` if they are not already there —
+currently `gemma-3-12b-it`, `Qwen2.5-14B-Instruct` and `Qwen2.5-7B-Instruct`,
+all `Q4_K_M` (see [`llamacpp/preload-models.sh`](llamacpp/preload-models.sh)
+for the exact repo strings). It never serves anything itself; it exists so
+that switching `LLAMA_HF_MODEL` to one of these and recreating
+`dall-m-llamacpp` is instant instead of a multi-GB download landing on
+whoever asks the agent right after:
+
+```bash
+docker compose up -d --build   # preload runs, then dall-m-llamacpp starts
+
+# later, to switch:
+sed -i '' 's/^LLAMA_HF_MODEL=.*/LLAMA_HF_MODEL=Qwen\/Qwen2.5-14B-Instruct-GGUF:Q4_K_M/' .env
+docker compose up -d --force-recreate dall-m-llamacpp
+python script/insert_default_model.py --name Qwen2.5-14B \
+  --model-name Qwen/Qwen2.5-14B-Instruct-GGUF:Q4_K_M --provider llama.cpp
+```
+
+To preload a different or additional model, add a line to the `MODELS` array
+in `llamacpp/preload-models.sh` — nothing in `docker-compose.yml` needs to
+change. It only ever serves one model at a time (`dall-m-server`'s
+`LLM_BASE_URL` points at one fixed `host:port`); the comment beside
+`dall-m-llamacpp` in `docker-compose.yml` says what serving a second one
+concurrently would additionally need.
+
 ## Database
 
 Connection settings come from `.env` (see [Configuration](#configuration)

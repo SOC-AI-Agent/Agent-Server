@@ -68,6 +68,25 @@ services:
     networks:
       - dall-m-net
 
+  # One-shot: downloads gemma-3-12b, Qwen2.5-14B and Qwen2.5-7B into the same
+  # ./data/models volume dall-m-llamacpp reads from, skipping any already there
+  # (see llamacpp/preload-models.sh) — so switching LLAMA_HF_MODEL to one of
+  # them later and recreating dall-m-llamacpp is instant, not a multi-GB
+  # download landing on whoever asks the agent right after. Runs once per
+  # `docker compose up`; a rerun with nothing missing does no network I/O.
+  dall-m-model-preload:
+    container_name: dall-m-model-preload
+    image: ghcr.io/ggml-org/llama.cpp:server
+    restart: "no"
+    entrypoint: ["bash", "/preload/preload-models.sh"]
+    volumes:
+      - ./data/models:/models
+      - ./llamacpp/preload-models.sh:/preload/preload-models.sh:ro
+    environment:
+      LLAMA_CACHE: /models
+    networks:
+      - dall-m-net
+
   dall-m-llamacpp:
     container_name: dall-m-llamacpp
     image: ghcr.io/ggml-org/llama.cpp:server
@@ -82,8 +101,19 @@ services:
       -hf ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
       --host 0.0.0.0
       --port 8080
+    depends_on:
+      dall-m-model-preload:
+        condition: service_completed_successfully
     networks:
       - dall-m-net
+    # Serves only this one model at a time — dall-m-server's LLM_BASE_URL points
+    # at one fixed host:port. To serve a second model concurrently rather than
+    # switching by recreating this container: copy this block (new
+    # container_name, a second host port, and its own -hf), then give
+    # dall-m-server a way to pick which of the two to call per agent — today it
+    # has exactly one LLM_BASE_URL, so that part is still a real change, not
+    # just a compose addition. Both instances would read the same
+    # ./data/models volume, so neither downloads what the other already has.
 
 
 networks:
