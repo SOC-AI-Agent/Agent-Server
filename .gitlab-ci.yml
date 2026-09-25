@@ -1,0 +1,183 @@
+# Agent-Server (DALL-M) — the agent platform. Ported from the LLM-Server
+# project's pipeline when the SOC stack moved off LLM-Server onto this repo;
+# the technique below (write_env, never an artifact, never printed) is that
+# project's, kept because the reasoning still applies here unchanged.
+#
+# Nothing in this repo's own files was touched to add this pipeline: it reads
+# .env.example, server/Dockerfile, frontend/Dockerfile and docker-compose.yml
+# exactly as they already are.
+#
+# ⚠️ docker-compose.yml has dall-m-server depend on dall-m-llamacpp with
+# `condition: service_healthy`, but dall-m-llamacpp defines no healthcheck.
+# Compose then has nothing to call "healthy", so `docker compose up --wait`
+# can hang rather than proceed. deploy_production bounds that wait so the
+# pipeline fails with a clear reason instead of hanging until the job
+# times out; it is not something this pipeline can fix without editing
+# docker-compose.yml.
+
+stages:
+  - build
+  - test
+  - deploy
+
+
+# ── Reusable: write .env from CI variables ──────────────────────────────────
+#
+# Not sed. A password containing | or / breaks the expression, and one
+# containing & is silently replaced by the matched text — the pipeline goes
+# green and the service cannot log in. This reads the keys from .env.example
+# and takes any that exist in the environment, whatever characters they hold.
+#
+# The result is never an artifact and never printed. Putting filled-in
+# credentials in GitLab's artifact store, or logging everything but the keys
+# that look like a password, are both how a pipeline leaks a secret while
+# looking clean.
+.write_env: &write_env |
+  set -eu
+  : > .env
+  while IFS= read -r line || [ -n "$line" ]; do
+    case "$line" in
+      ''|'#'*) printf '%s\n' "$line" >> .env; continue ;;
+    esac
+    key=${line%%=*}
+    if [ "$key" = "$line" ]; then printf '%s\n' "$line" >> .env; continue; fi
+    if eval "[ \"\${${key}+set}\" = set ]"; then
+      eval "printf '%s=%s\n' \"\$key\" \"\$$key\"" >> .env
+    else
+      printf '%s\n' "$line" >> .env
+    fi
+  done < .env.example
+  echo "wrote .env — keys taken from CI variables:"
+  while IFS= read -r line; do
+    key=${line%%=*}
+    case "$key" in ''|'#'*) continue ;; esac
+    if eval "[ \"\${${key}+set}\" = set ]"; then echo "  $key"; fi
+  done < .env.example
+
+build_image:
+  stage: build
+  image: docker:latest
+  services:
+    - docker:dind
+  variables:
+    DOCKER_HOST: tcp://docker:2375
+    DOCKER_TLS_CERTDIR: ""
+  script:
+    - docker build -t dall-m-server:${CI_COMMIT_SHORT_SHA} ./server
+    - docker build -t dall-m-frontend:${CI_COMMIT_SHORT_SHA} ./frontend
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+code_test:
+  stage: test
+  image: python:3.12
+  script:
+    - cd server
+    - pip install -q -r requirements.txt
+    - python -c "import app.main"
+    # Syntax only — the bootstrap scripts need a live Postgres to run for real,
+    # which is what deploy_production exercises them against.
+    - cd ../script
+    - python -m py_compile *.py
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+frontend_test:
+  stage: test
+  image: node:20
+  script:
+    - cd frontend
+    - npm ci
+    # next build reads NEXT_PUBLIC_* at build time; throwaway values are fine —
+    # this only checks that the app compiles and type-checks, nothing here talks
+    # to a real API. The deployed container runs `next dev`, not this build.
+    - |
+      cat > .env.local <<'EOF'
+      NEXT_PUBLIC_BASE_URL=http://localhost:8000
+      NEXT_PUBLIC_BASE_PATH=/restful
+      NEXT_PUBLIC_LLM_BASE_URL=http://localhost:8080
+      EOF
+    - npm run build
+  rules:
+    - if: '$CI_COMMIT_BRANCH'
+
+deploy_production:
+  stage: deploy
+  image: docker:latest
+  # The runner installed on the machine that hosts the stack — see Backend's
+  # or LLM-Server's .gitlab-ci.yml for why this has to be a specific runner
+  # rather than a shared one. Change the tag if Agent-Server deploys to a
+  # different host than the rest of the SOC stack.
+  tags:
+    - soc-deploy
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_TLS_CERTDIR: ""
+  environment:
+    name: production
+    # The admin UI — what a person actually opens. The API this repo also
+    # serves is the same host on :8000 (see readme.md).
+    url: '$AGENT_SERVER_URL'
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+  script:
+    - *write_env
+    # Fixed rather than left to whatever GitLab names the checkout directory:
+    # every docker compose call below, and the network name docker run needs
+    # to join, depend on this being the same project name every time.
+    - export COMPOSE_PROJECT_NAME=agent-server
+
+    - echo "========== 1. Build and start =========="
+    # Bounded rather than left to hang: see the note at the top of this file
+    # about dall-m-llamacpp having no healthcheck for dall-m-server to wait on.
+    - docker compose up -d --build --wait --wait-timeout 600
+
+    - echo "========== 2. Database schema =========="
+    # Idempotent (CREATE TABLE IF NOT EXISTS, upserts) — safe on every deploy.
+    # Run from a throwaway container on the compose network rather than via
+    # `compose exec`: script/ is not copied into the dall-m-server image (its
+    # Dockerfile only COPYs app/), so there is nothing in that container to run.
+    - |
+      docker run --rm --network agent-server_dall-m-net \
+        -v "$PWD/script:/script:ro" -w /script \
+        -e DB_HOST=dall-m-db -e DB_PORT=5432 \
+        -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
+        -e LLAMA_HF_MODEL="$LLAMA_HF_MODEL" \
+        python:3.12-slim sh -c "pip install --no-cache-dir -q -r requirements.txt \
+          && python create_db.py && python insert_default_model.py"
+
+    - echo "========== 3. Admin user =========="
+    # Only touched when AGENT_ADMIN_PASSWORD is set as a CI variable — this
+    # script upserts on every call, and calling it unconditionally would reset
+    # the admin password to the .env.example default (admin123) on every
+    # deploy. Set it once for the first deploy; leave it unset afterwards.
+    - |
+      if [ -n "${AGENT_ADMIN_PASSWORD:-}" ]; then
+        docker run --rm --network agent-server_dall-m-net \
+          -v "$PWD/script:/script:ro" -w /script \
+          -e DB_HOST=dall-m-db -e DB_PORT=5432 \
+          -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
+          python:3.12-slim sh -c "pip install --no-cache-dir -q -r requirements.txt \
+            && python add_admin_user.py --username '${AGENT_ADMIN_USERNAME:-admin}' \
+                 --email '${AGENT_ADMIN_EMAIL:-admin@example.com}' --password '$AGENT_ADMIN_PASSWORD'"
+      else
+        echo "AGENT_ADMIN_PASSWORD not set — admin user left as it is"
+      fi
+
+    - echo "========== 4. Health =========="
+    - |
+      for i in $(seq 1 30); do
+        if docker compose exec -T dall-m-server python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/',timeout=5).status==200 else 1)" 2>/dev/null; then
+          echo "healthy"
+          echo ""
+          echo "The three SOC agents (soc-suggest, soc-requirements, soc-conclude) are"
+          echo "not created by this pipeline — create or update them by hand at the"
+          echo "admin UI (\$AGENT_SERVER_URL) or POST /restful/agents, the same way a"
+          echo "first admin is provisioned by hand elsewhere in this stack."
+          exit 0
+        fi
+        sleep 4
+      done
+      echo "dall-m-server did not become healthy within 2 minutes"
+      docker compose logs --tail 50 dall-m-server dall-m-llamacpp
+      exit 1
