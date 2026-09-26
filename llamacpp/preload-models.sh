@@ -56,7 +56,7 @@ for entry in "${MODELS[@]}"; do
   fi
 
   echo "preload: $repo not cached yet, downloading..."
-  llama-server -hf "$repo" --host 127.0.0.1 --port "$PORT" --n-gpu-layers 0 &
+  /app/llama-server -hf "$repo" --host 127.0.0.1 --port "$PORT" --n-gpu-layers 0 &
   pid=$!
 
   waited=0
