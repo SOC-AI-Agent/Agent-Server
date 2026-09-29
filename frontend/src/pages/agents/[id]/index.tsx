@@ -39,9 +39,12 @@ import {
     ghostButtonClass,
     inputClass,
     labelClass,
+    noteClass,
     primaryButtonClass,
     sectionClass,
 } from "@/comps/agents/formStyles";
+import { paramNotes } from "@/comps/agents/paramNotes";
+import { AutoGrowTextarea } from "@/comps/agents/AutoGrowTextarea";
 import { AgentInvokePanel } from "@/comps/agents/AgentInvokePanel";
 import { getErrorMessage } from "@/utils/errorMessage";
 
@@ -395,7 +398,7 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                                         <option value="">ไม่ระบุ</option>
                                         {models.map((m) => (
                                             <option key={m.id} value={m.id}>
-                                                {m.name} ({m.model_name})
+                                                {m.name === m.model_name ? m.name : `${m.name} (${m.model_name})`}
                                             </option>
                                         ))}
                                     </select>
@@ -438,7 +441,7 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                                                 </div>
                                                 {isEditing ? (
                                                     <div className="flex flex-col gap-2">
-                                                        <textarea
+                                                        <AutoGrowTextarea
                                                             className={`${inputClass} font-mono`}
                                                             rows={4}
                                                             value={editingText}
@@ -495,7 +498,7 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                             <form onSubmit={handleAddPrompt} className="flex flex-col gap-2 pt-2 border-t border-[#1f2733]">
                                 <label className={labelClass}>
                                     เพิ่ม prompt เวอร์ชันใหม่
-                                    <textarea
+                                    <AutoGrowTextarea
                                         className={`${inputClass} font-mono`}
                                         rows={3}
                                         value={newPrompt}
@@ -515,7 +518,7 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
 
                         <form onSubmit={handleSaveConfig} className={sectionClass}>
                             <SectionTitle icon={<IconAdjustmentsHorizontal size={18} stroke={1.8} />}>Generation Config</SectionTitle>
-                            <div className="grid grid-cols-3 gap-4">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                                 <label className={labelClass}>
                                     <span className="flex items-baseline gap-1.5">
                                         Temperature <FieldHint>ยิ่งสูงยิ่งสุ่ม</FieldHint>
@@ -529,6 +532,7 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                                         value={temperature}
                                         onChange={(e) => setTemperature(e.target.value)}
                                     />
+                                    <span className={noteClass}>{paramNotes.temperature}</span>
                                 </label>
                                 <label className={labelClass}>
                                     Max Tokens
@@ -540,6 +544,7 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                                         value={maxTokens}
                                         onChange={(e) => setMaxTokens(e.target.value)}
                                     />
+                                    <span className={noteClass}>{paramNotes.max_tokens}</span>
                                 </label>
                                 <label className={labelClass}>
                                     Top P
@@ -549,13 +554,23 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                                         step="0.05"
                                         min="0"
                                         max="1"
+                                        placeholder="ค่า default"
                                         value={topP}
                                         onChange={(e) => setTopP(e.target.value)}
                                     />
+                                    <span className={noteClass}>{paramNotes.top_p}</span>
                                 </label>
                                 <label className={labelClass}>
                                     Top K
-                                    <input className={inputClass} type="number" min="0" value={topK} onChange={(e) => setTopK(e.target.value)} />
+                                    <input
+                                        className={inputClass}
+                                        type="number"
+                                        min="0"
+                                        placeholder="ค่า default"
+                                        value={topK}
+                                        onChange={(e) => setTopK(e.target.value)}
+                                    />
+                                    <span className={noteClass}>{paramNotes.top_k}</span>
                                 </label>
                                 <label className={labelClass}>
                                     Context Window
@@ -566,6 +581,7 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                                         value={contextWindow}
                                         onChange={(e) => setContextWindow(e.target.value)}
                                     />
+                                    <span className={noteClass}>{paramNotes.context_window}</span>
                                 </label>
                                 <label className={labelClass}>
                                     Repetition Penalty
@@ -573,13 +589,22 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                                         className={inputClass}
                                         type="number"
                                         step="0.05"
+                                        placeholder="ค่า default"
                                         value={repetitionPenalty}
                                         onChange={(e) => setRepetitionPenalty(e.target.value)}
                                     />
+                                    <span className={noteClass}>{paramNotes.repetition_penalty}</span>
                                 </label>
                                 <label className={labelClass}>
                                     Seed
-                                    <input className={inputClass} type="number" value={seed} onChange={(e) => setSeed(e.target.value)} />
+                                    <input
+                                        className={inputClass}
+                                        type="number"
+                                        placeholder="สุ่มทุกครั้ง"
+                                        value={seed}
+                                        onChange={(e) => setSeed(e.target.value)}
+                                    />
+                                    <span className={noteClass}>{paramNotes.seed}</span>
                                 </label>
                             </div>
                             <Toggle checked={streamingEnabled} onChange={setStreamingEnabled} label="เปิดใช้งาน streaming" />

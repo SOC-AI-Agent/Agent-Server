@@ -3,6 +3,8 @@ export const inputClass =
 
 export const labelClass = "flex flex-col gap-1 text-xs text-[#a3aebc]";
 
+export const noteClass = "text-[11px] leading-snug text-[#5b6472]";
+
 export const sectionClass = "bg-[#10151f] border border-[#1f2733] rounded-2xl p-5 flex flex-col gap-4";
 
 export const primaryButtonClass =

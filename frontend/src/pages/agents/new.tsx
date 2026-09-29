@@ -15,7 +15,9 @@ import { useNotification } from "@/comps/noti/notiComp";
 import { createAgent } from "@/utils/api/agents";
 import { getModels } from "@/utils/api/models";
 import { LlmModelOut } from "@/utils/interface/agent.types";
-import { ghostButtonClass, inputClass, labelClass, primaryButtonClass, sectionClass } from "@/comps/agents/formStyles";
+import { ghostButtonClass, inputClass, labelClass, noteClass, primaryButtonClass, sectionClass } from "@/comps/agents/formStyles";
+import { paramNotes } from "@/comps/agents/paramNotes";
+import { AutoGrowTextarea } from "@/comps/agents/AutoGrowTextarea";
 import { getErrorMessage } from "@/utils/errorMessage";
 import { useCurrentUser } from "@/utils/authToken";
 
@@ -104,8 +106,11 @@ function NewAgentPageContent() {
             </div>
 
             <div className="flex-1 overflow-y-auto">
-                <form onSubmit={handleSubmit} className="max-w-2xl mx-auto p-6 md:p-8 flex flex-col gap-6">
-                    <div className="flex items-center gap-3">
+                <form
+                    onSubmit={handleSubmit}
+                    className="max-w-6xl mx-auto p-6 md:p-8 grid grid-cols-1 lg:grid-cols-3 gap-6"
+                >
+                    <div className="lg:col-span-3 flex items-center gap-3">
                         <div className="w-11 h-11 rounded-2xl bg-[#12251c] flex items-center justify-center shrink-0">
                             <IconRobot size={22} className="text-[#34d399]" stroke={1.8} />
                         </div>
@@ -117,90 +122,92 @@ function NewAgentPageContent() {
                         </div>
                     </div>
 
-                    <div className={sectionClass}>
-                        <SectionTitle icon={<IconInfoCircle size={18} stroke={1.8} />}>ข้อมูลพื้นฐาน</SectionTitle>
+                    <div className="lg:col-span-2 flex flex-col gap-6 min-w-0">
+                        <div className={sectionClass}>
+                            <SectionTitle icon={<IconInfoCircle size={18} stroke={1.8} />}>ข้อมูลพื้นฐาน</SectionTitle>
 
-                        <div className="grid grid-cols-2 gap-4">
-                            <label className={labelClass}>
-                                <span className="flex items-baseline gap-1.5">
-                                    Slug * <FieldHint>ตัวระบุที่ใช้เรียกผ่าน API เช่น customer-support</FieldHint>
-                                </span>
-                                <input
-                                    className={`${inputClass} font-mono`}
-                                    value={slug}
-                                    onChange={(e) => setSlug(e.target.value)}
-                                    placeholder="customer-support"
-                                    required
-                                />
-                            </label>
-                            <label className={labelClass}>
-                                ชื่อ Agent *
-                                <input
-                                    className={inputClass}
-                                    value={name}
-                                    onChange={(e) => setName(e.target.value)}
-                                    placeholder="Customer Support Bot"
-                                    required
-                                />
-                            </label>
-                        </div>
-
-                        <label className={labelClass}>
-                            คำอธิบาย
-                            <textarea
-                                className={inputClass}
-                                rows={2}
-                                value={description}
-                                onChange={(e) => setDescription(e.target.value)}
-                                placeholder="Agent นี้ใช้ทำอะไร..."
-                            />
-                        </label>
-
-                        <div className="grid grid-cols-2 gap-4">
-                            <label className={labelClass}>
-                                Owner
-                                <div className="flex items-center gap-2 bg-[#0a0e14] border border-[#1f2733] rounded-lg px-3 py-2">
-                                    <IconUserCircle size={18} className="text-[#7b8698]" stroke={1.8} />
-                                    <span className="text-sm text-[#e6edf3]">
-                                        {currentUser?.username ?? "กำลังโหลด..."}
+                            <div className="grid grid-cols-2 gap-4">
+                                <label className={labelClass}>
+                                    <span className="flex items-baseline gap-1.5">
+                                        Slug * <FieldHint>ตัวระบุที่ใช้เรียกผ่าน API เช่น customer-support</FieldHint>
                                     </span>
-                                    <span className="text-[11px] text-[#5b6472] ml-auto">คุณ</span>
-                                </div>
-                            </label>
+                                    <input
+                                        className={`${inputClass} font-mono`}
+                                        value={slug}
+                                        onChange={(e) => setSlug(e.target.value)}
+                                        placeholder="customer-support"
+                                        required
+                                    />
+                                </label>
+                                <label className={labelClass}>
+                                    ชื่อ Agent *
+                                    <input
+                                        className={inputClass}
+                                        value={name}
+                                        onChange={(e) => setName(e.target.value)}
+                                        placeholder="Customer Support Bot"
+                                        required
+                                    />
+                                </label>
+                            </div>
+
                             <label className={labelClass}>
-                                Model
-                                <select className={inputClass} value={modelId} onChange={(e) => setModelId(e.target.value)}>
-                                    <option value="">ไม่ระบุ</option>
-                                    {models.map((m) => (
-                                        <option key={m.id} value={m.id}>
-                                            {m.name} ({m.model_name})
-                                        </option>
-                                    ))}
-                                </select>
+                                คำอธิบาย
+                                <textarea
+                                    className={inputClass}
+                                    rows={2}
+                                    value={description}
+                                    onChange={(e) => setDescription(e.target.value)}
+                                    placeholder="Agent นี้ใช้ทำอะไร..."
+                                />
+                            </label>
+
+                            <div className="grid grid-cols-2 gap-4">
+                                <label className={labelClass}>
+                                    Owner
+                                    <div className="flex items-center gap-2 bg-[#0a0e14] border border-[#1f2733] rounded-lg px-3 py-2">
+                                        <IconUserCircle size={18} className="text-[#7b8698]" stroke={1.8} />
+                                        <span className="text-sm text-[#e6edf3]">
+                                            {currentUser?.username ?? "กำลังโหลด..."}
+                                        </span>
+                                        <span className="text-[11px] text-[#5b6472] ml-auto">คุณ</span>
+                                    </div>
+                                </label>
+                                <label className={labelClass}>
+                                    Model
+                                    <select className={inputClass} value={modelId} onChange={(e) => setModelId(e.target.value)}>
+                                        <option value="">ไม่ระบุ</option>
+                                        {models.map((m) => (
+                                            <option key={m.id} value={m.id}>
+                                                {m.name === m.model_name ? m.name : `${m.name} (${m.model_name})`}
+                                            </option>
+                                        ))}
+                                    </select>
+                                </label>
+                            </div>
+                        </div>
+
+                        <div className={sectionClass}>
+                            <SectionTitle icon={<IconMessage size={18} stroke={1.8} />}>System Prompt เริ่มต้น</SectionTitle>
+                            <label className={labelClass}>
+                                เวอร์ชัน 1
+                                <AutoGrowTextarea
+                                    className={`${inputClass} font-mono`}
+                                    rows={10}
+                                    value={systemPrompt}
+                                    onChange={(e) => setSystemPrompt(e.target.value)}
+                                    placeholder="คุณคือผู้ช่วยที่..."
+                                />
                             </label>
                         </div>
                     </div>
 
-                    <div className={sectionClass}>
-                        <SectionTitle icon={<IconMessage size={18} stroke={1.8} />}>System Prompt เริ่มต้น</SectionTitle>
-                        <label className={labelClass}>
-                            เวอร์ชัน 1
-                            <textarea
-                                className={`${inputClass} font-mono`}
-                                rows={4}
-                                value={systemPrompt}
-                                onChange={(e) => setSystemPrompt(e.target.value)}
-                                placeholder="คุณคือผู้ช่วยที่..."
-                            />
-                        </label>
-                    </div>
-
-                    <div className={sectionClass}>
+                    <div className={`${sectionClass} self-start`}>
                         <SectionTitle icon={<IconAdjustmentsHorizontal size={18} stroke={1.8} />}>
                             พารามิเตอร์การ Generate
                         </SectionTitle>
 
-                        <div className="grid grid-cols-3 gap-4">
+                        <div className="grid grid-cols-1 sm:grid-cols-3 lg:grid-cols-1 gap-4">
                             <label className={labelClass}>
                                 <span className="flex items-baseline gap-1.5">
                                     Temperature <FieldHint>ยิ่งสูงยิ่งสุ่ม</FieldHint>
@@ -214,6 +221,7 @@ function NewAgentPageContent() {
                                     value={temperature}
                                     onChange={(e) => setTemperature(e.target.value)}
                                 />
+                                <span className={noteClass}>{paramNotes.temperature}</span>
                             </label>
                             <label className={labelClass}>
                                 <span className="flex items-baseline gap-1.5">
@@ -227,6 +235,7 @@ function NewAgentPageContent() {
                                     value={maxTokens}
                                     onChange={(e) => setMaxTokens(e.target.value)}
                                 />
+                                <span className={noteClass}>{paramNotes.max_tokens}</span>
                             </label>
                             <label className={labelClass}>
                                 <span className="flex items-baseline gap-1.5">
@@ -238,9 +247,11 @@ function NewAgentPageContent() {
                                     step="0.05"
                                     min="0"
                                     max="1"
+                                    placeholder="ค่า default"
                                     value={topP}
                                     onChange={(e) => setTopP(e.target.value)}
                                 />
+                                <span className={noteClass}>{paramNotes.top_p}</span>
                             </label>
                         </div>
                         <p className="text-xs text-[#7b8698]">
@@ -248,7 +259,7 @@ function NewAgentPageContent() {
                         </p>
                     </div>
 
-                    <div className="flex justify-end gap-3">
+                    <div className="lg:col-span-3 flex justify-end gap-3">
                         <Link href="/agents" className={ghostButtonClass}>
                             ยกเลิก
                         </Link>

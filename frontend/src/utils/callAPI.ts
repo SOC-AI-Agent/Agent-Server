@@ -82,7 +82,9 @@ export async function fetchDataApi(
     return data;
 
   } catch (error) {
-    console.error('API call failed:', error);
+    // warn, not error: Next dev overlay pops on every console.error even when the
+    // caller catches it (404 config, 409 delete), and callers already notify the user.
+    console.warn('API call failed:', error);
     throw error;
   }
 }
