@@ -272,6 +272,14 @@ http://localhost:8000/docs. At a glance:
 > intentional design choice — don't expose port 8000 outside a trusted
 > network as-is.
 
+## Used by the SOC stack
+
+AI-Service (`soc-ai`) calls `POST /v1/agents/{slug}/chat` here for every
+alert, by URL rather than over a shared Docker network. How that is wired in
+production — the URL, which agents must exist, how to check the connection
+after a deploy, and which of this stack's ports to close — is in
+[AI-Service's README → In production](../AI-Service/README.md#in-production).
+
 ## Known limitations
 
 - User passwords are stored in plain text (no hashing).
