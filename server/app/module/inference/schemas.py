@@ -7,13 +7,15 @@ from pydantic import BaseModel
 
 class InferenceRequestOut(BaseModel):
     id: UUID
-    agent_id: UUID
+    # None once the agent (and with it, the prompt) has been deleted.
+    agent_id: Optional[UUID] = None
     agent_slug: str
     agent_name: str
     owner_id: UUID
-    owner_username: str
-    prompt_id: UUID
+    owner_username: Optional[str] = None
+    prompt_id: Optional[UUID] = None
     prompt_version: int
+    system_prompt: str
     model_id: Optional[UUID] = None
     model_name: Optional[str] = None
     user_prompt: str

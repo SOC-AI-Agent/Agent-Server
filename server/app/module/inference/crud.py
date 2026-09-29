@@ -3,10 +3,12 @@ from uuid import UUID
 
 from app.module.database.connection import get_cursor
 
+# Agent, owner and prompt come from the row's own snapshot, not a join: the
+# agent may have been deleted since, and history still has to read back.
 HISTORY_COLUMNS = """
-    ir.id, ir.agent_id, a.slug AS agent_slug, a.name AS agent_name,
-    a.owner_id, u.username AS owner_username,
-    ir.prompt_id, ap.version AS prompt_version,
+    ir.id, ir.agent_id, ir.agent_slug, ir.agent_name,
+    ir.owner_id, u.username AS owner_username,
+    ir.prompt_id, ir.prompt_version, ir.system_prompt,
     ir.model_id, lm.name AS model_name,
     ir.user_prompt, ir.assistant_response,
     ir.input_tokens, ir.output_tokens, ir.total_tokens,
@@ -14,9 +16,7 @@ HISTORY_COLUMNS = """
 """
 HISTORY_JOINS = """
     FROM inference_requests ir
-    JOIN agents a ON a.id = ir.agent_id
-    JOIN users u ON u.id = a.owner_id
-    JOIN agent_prompts ap ON ap.id = ir.prompt_id
+    LEFT JOIN users u ON u.id = ir.owner_id
     LEFT JOIN llm_models lm ON lm.id = ir.model_id
 """
 
@@ -25,7 +25,7 @@ def _history_where(owner_id: Optional[UUID], agent_id: Optional[UUID], status_fi
     conditions = []
     params: list = []
     if owner_id is not None:
-        conditions.append("a.owner_id = %s")
+        conditions.append("ir.owner_id = %s")
         params.append(str(owner_id))
     if agent_id is not None:
         conditions.append("ir.agent_id = %s")
@@ -75,9 +75,8 @@ def count_inference_requests(
 
 
 def log_inference(
-    agent_id: UUID,
-    prompt_id: UUID,
-    model_id: Optional[UUID],
+    agent: dict,
+    prompt: dict,
     user_prompt: str,
     assistant_response: Optional[str],
     input_tokens: Optional[int],
@@ -91,15 +90,21 @@ def log_inference(
         cur.execute(
             """
             INSERT INTO inference_requests (
-                agent_id, prompt_id, model_id, user_prompt, assistant_response,
+                agent_id, prompt_id, agent_slug, agent_name, owner_id, prompt_version, system_prompt,
+                model_id, user_prompt, assistant_response,
                 input_tokens, output_tokens, total_tokens, latency_ms, status, error_message
             )
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s);
             """,
             (
-                str(agent_id),
-                str(prompt_id),
-                str(model_id) if model_id else None,
+                str(agent["id"]),
+                str(prompt["id"]),
+                agent["slug"],
+                agent["name"],
+                str(agent["owner_id"]),
+                prompt["version"],
+                prompt["system_prompt"],
+                str(agent["model_id"]) if agent["model_id"] else None,
                 user_prompt,
                 assistant_response,
                 input_tokens,

@@ -104,10 +104,17 @@ llm_models ───► agents ───► agent_prompts ───┐
 ### 6. `inference_requests`
 **Log การเรียกใช้งาน LLM ทุกครั้ง** ผ่าน agent — เก็บทั้ง request/response, การใช้ token, performance และสถานะ เพื่อใช้ตรวจสอบย้อนหลัง, debug, และวิเคราะห์การใช้งาน/ค่าใช้จ่าย
 
+**เป็น audit log ที่แยกจาก agent และลบไม่ได้:**
+- ทุกแถวเก็บสำเนา agent และ system prompt ที่ใช้จริงไว้ในตัวเอง ลบ agent หรือแก้ prompt ทีหลังจึงไม่กระทบ history
+- `agent_id`/`prompt_id` จะกลายเป็น `NULL` เมื่อ agent ถูกลบ (`ON DELETE SET NULL`)
+- trigger `inference_requests_no_delete` / `inference_requests_no_truncate` ปฏิเสธ `DELETE` และ `TRUNCATE` ทุกกรณี ถ้าจะล้างจริงต้องตั้งใจ `ALTER TABLE inference_requests DISABLE TRIGGER USER` ก่อน
+
 | คอลัมน์ | คำอธิบาย |
 |---|---|
-| `agent_id` | agent ที่ถูกเรียก (FK → `agents`) |
-| `prompt_id` | prompt เวอร์ชันที่ใช้จริงตอนยิง request นี้ (FK → `agent_prompts`) |
+| `agent_id` | agent ที่ถูกเรียก (FK → `agents`, `NULL` เมื่อ agent ถูกลบ) |
+| `prompt_id` | prompt เวอร์ชันที่ใช้จริงตอนยิง request นี้ (FK → `agent_prompts`, `NULL` เมื่อถูกลบ) |
+| `agent_slug`, `agent_name`, `owner_id` | สำเนาข้อมูล agent ณ ตอนเรียก ใช้แสดงผลและกรองสิทธิ์ (user ทั่วไปเห็นเฉพาะของตัวเอง) |
+| `prompt_version`, `system_prompt` | สำเนา system prompt ที่ส่งให้โมเดลจริง (ไม่เปลี่ยนตามการแก้ prompt ทีหลัง) |
 | `model_id` | โมเดลที่ใช้จริงตอนยิง request นี้ (FK → `llm_models`) |
 | `api_client_id` | ผู้เรียก API (ยังไม่มีตาราง `api_clients` รองรับ — คอมเมนต์ไว้ใน ERD ว่าเป็นแผนในอนาคต) |
 | `user_prompt` | ข้อความ/prompt ที่ผู้ใช้ส่งเข้ามา |

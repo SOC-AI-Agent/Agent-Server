@@ -1,4 +1,5 @@
 import json
+import logging
 import time
 from typing import Any, Optional
 
@@ -10,7 +11,10 @@ from app.module.agent import crud as agent_crud
 from app.module.agent.schemas import AgentChatRequest, AgentChatResponse
 from app.module.inference import crud as inference_crud
 from app.module.llm.client import get_chat, stream_chat
+from app.module.logs import preview
 from app.module.models import crud as models_crud
+
+log = logging.getLogger("dall_m.invoke")
 
 # Public inference surface for *using* an agent (as opposed to /restful, which
 # manages agent resources and requires a logged-in session). Not gated behind
@@ -66,8 +70,42 @@ def _resolve(slug: str, version: Optional[int]):
     return agent, prompt, model, config
 
 
+def _record(
+    agent: dict,
+    prompt: dict,
+    model_name: Optional[str],
+    stream: bool,
+    message: str,
+    response_text: Optional[str],
+    usage: dict,
+    latency_ms: int,
+    error: Optional[str] = None,
+) -> None:
+    """Write the history row and the log line for one call, success or not."""
+    inference_crud.log_inference(
+        agent, prompt, message, response_text,
+        usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"),
+        latency_ms, "error" if error else "success", error,
+    )
+    head = "agent=%s v%d model=%s stream=%s in_chars=%d"
+    args = (agent["slug"], prompt["version"], model_name or "-", stream, len(message))
+    if error:
+        log.error(head + " -> error after %dms: %s", *args, latency_ms, error)
+    else:
+        log.info(
+            head + " -> success %dms tokens in=%s out=%s",
+            *args, latency_ms, usage.get("prompt_tokens"), usage.get("completion_tokens"),
+        )
+    log.debug("agent=%s message=%s response=%s", agent["slug"], preview(message), preview(response_text))
+
+
 async def _chat(slug: str, version: Optional[int], payload: AgentChatRequest):
-    agent, prompt, model, config = _resolve(slug, version)
+    try:
+        agent, prompt, model, config = _resolve(slug, version)
+    except HTTPException as exc:
+        # The usual reason a caller like AI-Service gets nothing back.
+        log.warning("agent=%s version=%s rejected: %s", slug, version or "active", exc.detail)
+        raise
     messages = [
         {"role": "system", "content": prompt["system_prompt"]},
         {"role": "user", "content": payload.message},
@@ -81,19 +119,12 @@ async def _chat(slug: str, version: Optional[int], payload: AgentChatRequest):
             result = await get_chat(messages, model_name=model_name, **gen_params)
         except httpx.HTTPError as exc:
             latency_ms = int((time.perf_counter() - start) * 1000)
-            inference_crud.log_inference(
-                agent["id"], prompt["id"], agent["model_id"], payload.message,
-                None, None, None, None, latency_ms, "error", str(exc),
-            )
+            _record(agent, prompt, model_name, False, payload.message, None, {}, latency_ms, str(exc) or type(exc).__name__)
             raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail=f"LLM server error: {exc}")
 
         latency_ms = int((time.perf_counter() - start) * 1000)
         usage = result.get("usage") or {}
-        inference_crud.log_inference(
-            agent["id"], prompt["id"], agent["model_id"], payload.message, result["content"],
-            usage.get("prompt_tokens"), usage.get("completion_tokens"), usage.get("total_tokens"),
-            latency_ms, "success",
-        )
+        _record(agent, prompt, model_name, False, payload.message, result["content"], usage, latency_ms)
         return AgentChatResponse(
             agent=agent["slug"],
             prompt_version=prompt["version"],
@@ -117,19 +148,15 @@ async def _chat(slug: str, version: Optional[int], payload: AgentChatRequest):
                     yield f"event: token\ndata: {json.dumps({'content': chunk['delta']})}\n\n"
         except httpx.HTTPError as exc:
             latency_ms = int((time.perf_counter() - start) * 1000)
-            inference_crud.log_inference(
-                agent["id"], prompt["id"], agent["model_id"], payload.message,
-                "".join(full_text) or None, None, None, None, latency_ms, "error", str(exc),
+            _record(
+                agent, prompt, model_name, True, payload.message, "".join(full_text) or None,
+                {}, latency_ms, str(exc) or type(exc).__name__,
             )
             yield f"event: error\ndata: {json.dumps({'message': str(exc)})}\n\n"
             return
 
         latency_ms = int((time.perf_counter() - start) * 1000)
-        inference_crud.log_inference(
-            agent["id"], prompt["id"], agent["model_id"], payload.message, "".join(full_text),
-            usage_info.get("prompt_tokens"), usage_info.get("completion_tokens"), usage_info.get("total_tokens"),
-            latency_ms, "success",
-        )
+        _record(agent, prompt, model_name, True, payload.message, "".join(full_text), usage_info, latency_ms)
         yield f"event: done\ndata: {json.dumps({'latency_ms': latency_ms, **usage_info})}\n\n"
 
     return StreamingResponse(

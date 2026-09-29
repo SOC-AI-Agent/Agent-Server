@@ -89,13 +89,15 @@ export interface AgentUpdate {
 
 export interface InferenceRequestOut {
     id: string;
-    agent_id: string;
+    // null once the agent has been deleted; slug/name/prompt below are the snapshot taken at call time.
+    agent_id: string | null;
     agent_slug: string;
     agent_name: string;
     owner_id: string;
-    owner_username: string;
-    prompt_id: string;
+    owner_username: string | null;
+    prompt_id: string | null;
     prompt_version: number;
+    system_prompt: string;
     model_id?: string | null;
     model_name?: string | null;
     user_prompt: string;

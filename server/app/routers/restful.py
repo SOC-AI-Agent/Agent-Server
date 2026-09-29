@@ -1,8 +1,9 @@
+import logging
 from typing import List, Optional
 from uuid import UUID
 
 import psycopg2
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 
 from app.module.agent import crud as agent_crud
 from app.module.agent.schemas import (
@@ -25,6 +26,8 @@ from app.module.models.schemas import LlmModelOut
 from app.module.users import crud as users_crud
 from app.module.users.schemas import UserCreate, UserOut, UserUpdate
 
+log = logging.getLogger("dall_m.audit")
+
 # Public — no login required.
 auth_router = APIRouter(prefix="/restful/auth", tags=["auth"])
 
@@ -32,16 +35,27 @@ auth_router = APIRouter(prefix="/restful/auth", tags=["auth"])
 router = APIRouter(prefix="/restful", tags=["restful"], dependencies=[Depends(get_current_user)])
 
 
+def _audit(user: dict, action: str, **fields) -> None:
+    """Who changed what. The request line in main.py has the path; this has the meaning."""
+    detail = " ".join(f"{key}={value}" for key, value in fields.items())
+    log.info("%s by=%s %s", action, user["username"], detail)
+
+
 # ========================================
 # AUTH
 # ========================================
 
 @auth_router.post("/login", response_model=LoginResponse)
-def login(payload: LoginRequest):
+def login(payload: LoginRequest, request: Request):
+    client = request.client.host if request.client else "-"
     user = users_crud.get_user_by_username_with_password(payload.username)
     if user is None or user["password"] != payload.password or not user["is_active"]:
+        reason = "unknown user" if user is None else "inactive user" if not user["is_active"] else "wrong password"
+        log.warning("login.failed username=%s reason=%s client=%s", payload.username, reason, client)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid username or password")
 
+    request.state.username = user["username"]
+    log.info("login.success username=%s admin=%s client=%s", user["username"], user["is_admin"], client)
     token = create_access_token(user)
     user_out = {key: value for key, value in user.items() if key != "password"}
     return {"access_token": token, "token_type": "bearer", "user": user_out}
@@ -64,30 +78,37 @@ def get_user(user_id: UUID):
     return user
 
 
-@router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_admin)])
-def create_user(payload: UserCreate):
+@router.post("/users", response_model=UserOut, status_code=status.HTTP_201_CREATED)
+def create_user(payload: UserCreate, actor: dict = Depends(require_admin)):
     try:
-        return users_crud.create_user(payload)
+        user = users_crud.create_user(payload)
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username or email already exists")
+    _audit(actor, "user.create", id=user["id"], username=user["username"], admin=user["is_admin"])
+    return user
 
 
-@router.put("/users/{user_id}", response_model=UserOut, dependencies=[Depends(require_admin)])
-def update_user(user_id: UUID, payload: UserUpdate):
+@router.put("/users/{user_id}", response_model=UserOut)
+def update_user(user_id: UUID, payload: UserUpdate, actor: dict = Depends(require_admin)):
     try:
         user = users_crud.update_user(user_id, payload)
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Username or email already exists")
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    # Field names only: one of them may be the password.
+    _audit(actor, "user.update", id=user_id, username=user["username"],
+           fields=sorted(payload.model_dump(exclude_unset=True)))
     return user
 
 
-@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT, dependencies=[Depends(require_admin)])
-def delete_user(user_id: UUID):
+@router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_user(user_id: UUID, actor: dict = Depends(require_admin)):
+    target = users_crud.get_user(user_id)
     deleted = users_crud.delete_user(user_id)
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="User not found")
+    _audit(actor, "user.delete", id=user_id, username=target["username"] if target else "?")
 
 
 # ========================================
@@ -125,17 +146,20 @@ def get_agent(agent_id: UUID):
 
 
 @router.post("/agents", response_model=AgentOut, status_code=status.HTTP_201_CREATED)
-def create_agent(payload: AgentCreate):
+def create_agent(payload: AgentCreate, actor: dict = Depends(get_current_user)):
     try:
-        return agent_crud.create_agent(payload)
+        agent = agent_crud.create_agent(payload)
     except psycopg2.errors.UniqueViolation:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Agent slug already exists")
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid owner_id or model_id")
+    _audit(actor, "agent.create", id=agent["id"], slug=agent["slug"], model_id=agent["model_id"],
+           with_prompt=bool(payload.system_prompt), with_config=payload.config is not None)
+    return agent
 
 
 @router.put("/agents/{agent_id}", response_model=AgentOut)
-def update_agent(agent_id: UUID, payload: AgentUpdate):
+def update_agent(agent_id: UUID, payload: AgentUpdate, actor: dict = Depends(get_current_user)):
     try:
         agent = agent_crud.update_agent(agent_id, payload)
     except psycopg2.errors.UniqueViolation:
@@ -144,20 +168,16 @@ def update_agent(agent_id: UUID, payload: AgentUpdate):
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid model_id")
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    _audit(actor, "agent.update", id=agent_id, slug=agent["slug"], changes=payload.model_dump(exclude_unset=True))
     return agent
 
 
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_agent(agent_id: UUID):
-    try:
-        deleted = agent_crud.delete_agent(agent_id)
-    except psycopg2.errors.ForeignKeyViolation:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot delete agent with existing prompts, config, or inference requests",
-        )
-    if not deleted:
+def delete_agent(agent_id: UUID, actor: dict = Depends(get_current_user)):
+    agent = agent_crud.get_agent(agent_id)
+    if agent is None or not agent_crud.delete_agent(agent_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    _audit(actor, "agent.delete", id=agent_id, slug=agent["slug"], name=repr(agent["name"]))
 
 
 # ========================================
@@ -170,41 +190,43 @@ def list_agent_prompts(agent_id: UUID):
 
 
 @router.post("/agents/{agent_id}/prompts", response_model=AgentPromptOut, status_code=status.HTTP_201_CREATED)
-def create_agent_prompt(agent_id: UUID, payload: AgentPromptCreate):
+def create_agent_prompt(agent_id: UUID, payload: AgentPromptCreate, actor: dict = Depends(get_current_user)):
     try:
-        return agent_crud.create_prompt(agent_id, payload)
+        prompt = agent_crud.create_prompt(agent_id, payload)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    _audit(actor, "prompt.create", agent_id=agent_id, version=prompt["version"], active=prompt["is_active"],
+           chars=len(prompt["system_prompt"]))
+    return prompt
 
 
 @router.put("/agents/{agent_id}/prompts/{prompt_id}", response_model=AgentPromptOut)
-def update_agent_prompt(agent_id: UUID, prompt_id: UUID, payload: AgentPromptUpdate):
+def update_agent_prompt(
+    agent_id: UUID, prompt_id: UUID, payload: AgentPromptUpdate, actor: dict = Depends(get_current_user),
+):
     """Edit the text of an existing prompt version in place (does not create a new version)."""
     prompt = agent_crud.update_prompt(agent_id, prompt_id, payload)
     if prompt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found")
+    _audit(actor, "prompt.edit_in_place", agent_id=agent_id, version=prompt["version"],
+           chars=len(prompt["system_prompt"]))
     return prompt
 
 
 @router.put("/agents/{agent_id}/prompts/{prompt_id}/activate", response_model=AgentPromptOut)
-def activate_agent_prompt(agent_id: UUID, prompt_id: UUID):
+def activate_agent_prompt(agent_id: UUID, prompt_id: UUID, actor: dict = Depends(get_current_user)):
     prompt = agent_crud.activate_prompt(agent_id, prompt_id)
     if prompt is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found")
+    _audit(actor, "prompt.activate", agent_id=agent_id, version=prompt["version"])
     return prompt
 
 
 @router.delete("/agents/{agent_id}/prompts/{prompt_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_agent_prompt(agent_id: UUID, prompt_id: UUID):
-    try:
-        deleted = agent_crud.delete_prompt(agent_id, prompt_id)
-    except psycopg2.errors.ForeignKeyViolation:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Cannot delete a prompt version referenced by inference requests",
-        )
-    if not deleted:
+def delete_agent_prompt(agent_id: UUID, prompt_id: UUID, actor: dict = Depends(get_current_user)):
+    if not agent_crud.delete_prompt(agent_id, prompt_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Prompt not found")
+    _audit(actor, "prompt.delete", agent_id=agent_id, prompt_id=prompt_id)
 
 
 # ========================================
@@ -220,18 +242,20 @@ def get_agent_config(agent_id: UUID):
 
 
 @router.put("/agents/{agent_id}/config", response_model=AgentConfigOut)
-def upsert_agent_config(agent_id: UUID, payload: AgentConfigIn):
+def upsert_agent_config(agent_id: UUID, payload: AgentConfigIn, actor: dict = Depends(get_current_user)):
     try:
-        return agent_crud.upsert_config(agent_id, payload)
+        config = agent_crud.upsert_config(agent_id, payload)
     except psycopg2.errors.ForeignKeyViolation:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
+    _audit(actor, "config.save", agent_id=agent_id, changes=payload.model_dump(exclude_unset=True))
+    return config
 
 
 @router.delete("/agents/{agent_id}/config", status_code=status.HTTP_204_NO_CONTENT)
-def delete_agent_config(agent_id: UUID):
-    deleted = agent_crud.delete_config(agent_id)
-    if not deleted:
+def delete_agent_config(agent_id: UUID, actor: dict = Depends(get_current_user)):
+    if not agent_crud.delete_config(agent_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Config not found")
+    _audit(actor, "config.delete", agent_id=agent_id)
 
 
 # ========================================

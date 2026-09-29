@@ -32,6 +32,10 @@ function StatusBadge({ status: s }: { status: string }) {
     );
 }
 
+function DeletedBadge() {
+    return <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-[#1f2733] text-[#7b8698] align-middle">ลบแล้ว</span>;
+}
+
 function DetailModal({ item, onClose }: { item: InferenceRequestOut; onClose: () => void }) {
     return (
         <div
@@ -44,7 +48,9 @@ function DetailModal({ item, onClose }: { item: InferenceRequestOut; onClose: ()
             >
                 <div className="flex items-center justify-between px-5 py-4 border-b border-[#1f2733] shrink-0">
                     <div className="min-w-0">
-                        <div className="text-[#e6edf3] font-semibold truncate">{item.agent_name}</div>
+                        <div className="text-[#e6edf3] font-semibold truncate">
+                            {item.agent_name} {!item.agent_id && <DeletedBadge />}
+                        </div>
                         <div className="text-xs text-[#7b8698] font-mono">
                             {item.agent_slug} · v{item.prompt_version} · {formatDate(item.created_at)}
                         </div>
@@ -56,10 +62,17 @@ function DetailModal({ item, onClose }: { item: InferenceRequestOut; onClose: ()
                 <div className="p-5 flex flex-col gap-4">
                     <div className="flex flex-wrap items-center gap-2 text-xs text-[#7b8698]">
                         <StatusBadge status={item.status} />
-                        <span>Owner: {item.owner_username}</span>
+                        <span>Owner: {item.owner_username ?? "-"}</span>
                         {item.model_name && <span>· Model: {item.model_name}</span>}
                         {item.latency_ms != null && <span>· {item.latency_ms}ms</span>}
                         {item.total_tokens != null && <span>· {item.total_tokens} tokens</span>}
+                    </div>
+
+                    <div className="flex flex-col gap-1.5">
+                        <span className="text-xs text-[#a3aebc] font-medium">System Prompt (v{item.prompt_version}, ตามที่ใช้จริงตอนเรียก)</span>
+                        <pre className="bg-[#0a0e14] border border-[#1f2733] rounded-xl p-3 text-sm text-[#a3aebc] whitespace-pre-wrap break-words max-h-48 overflow-y-auto">
+                            {item.system_prompt}
+                        </pre>
                     </div>
 
                     <div className="flex flex-col gap-1.5">
@@ -218,16 +231,22 @@ function HistoryPageContent() {
                                     >
                                         <td className="px-4 py-3 text-[#a3aebc] whitespace-nowrap">{formatDate(item.created_at)}</td>
                                         <td className="px-4 py-3">
-                                            <Link
-                                                href={`/agents/${item.agent_id}`}
-                                                onClick={(e) => e.stopPropagation()}
-                                                className="text-[#e6edf3] hover:text-[#34d399]"
-                                            >
-                                                {item.agent_name}
-                                            </Link>
+                                            {item.agent_id ? (
+                                                <Link
+                                                    href={`/agents/${item.agent_id}`}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="text-[#e6edf3] hover:text-[#34d399]"
+                                                >
+                                                    {item.agent_name}
+                                                </Link>
+                                            ) : (
+                                                <span className="text-[#a3aebc]">
+                                                    {item.agent_name} <DeletedBadge />
+                                                </span>
+                                            )}
                                         </td>
                                         {currentUser?.is_admin && (
-                                            <td className="px-4 py-3 text-[#a3aebc]">{item.owner_username}</td>
+                                            <td className="px-4 py-3 text-[#a3aebc]">{item.owner_username ?? "-"}</td>
                                         )}
                                         <td className="px-4 py-3 text-[#a3aebc] font-mono">v{item.prompt_version}</td>
                                         <td className="px-4 py-3">

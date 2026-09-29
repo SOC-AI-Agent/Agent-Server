@@ -196,10 +196,18 @@ Table agent_configs {
 Table inference_requests {
   id uuid [pk]
 
-  agent_id uuid [not null]
+  // NULL once the agent / prompt is deleted (ON DELETE SET NULL)
+  agent_id uuid
 
   // Exact prompt version used
-  prompt_id uuid [not null]
+  prompt_id uuid
+
+  // Snapshot at call time, so history outlives the agent. Rows cannot be deleted (trigger).
+  agent_slug varchar(100) [not null]
+  agent_name varchar(255) [not null]
+  owner_id uuid [not null]
+  prompt_version int [not null]
+  system_prompt text [not null]
 
   // Exact model used
   model_id uuid

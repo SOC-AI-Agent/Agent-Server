@@ -111,9 +111,23 @@ def update_agent(agent_id: UUID, data: AgentUpdate) -> Optional[dict]:
 
 
 def delete_agent(agent_id: UUID) -> bool:
-    with get_cursor(commit=True) as cur:
-        cur.execute("DELETE FROM agents WHERE id = %s RETURNING id;", (str(agent_id),))
-        return cur.fetchone() is not None
+    """Delete the agent along with its prompts and config. Its inference_requests
+    stay: each row carries its own snapshot of the agent and system prompt, and
+    its links to them go NULL (ON DELETE SET NULL) instead of blocking this."""
+    conn = get_connection()
+    try:
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute("DELETE FROM agent_prompts WHERE agent_id = %s;", (str(agent_id),))
+            cur.execute("DELETE FROM agent_configs WHERE agent_id = %s;", (str(agent_id),))
+            cur.execute("DELETE FROM agents WHERE id = %s RETURNING id;", (str(agent_id),))
+            deleted = cur.fetchone()
+        conn.commit()
+        return deleted is not None
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 # ========================================

@@ -175,14 +175,23 @@ STATEMENTS = [
     # ========================================
     # INFERENCE REQUESTS
     # ========================================
+    # An audit log that outlives the agents it records: each row carries its own
+    # copy of the agent and the exact system prompt sent, so deleting an agent
+    # (or editing a prompt version in place) never changes or removes history.
     """
     CREATE TABLE IF NOT EXISTS inference_requests (
         id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
 
-        agent_id uuid NOT NULL REFERENCES agents (id),
+        -- Link to the live agent / prompt; NULL once that agent is deleted
+        agent_id uuid REFERENCES agents (id) ON DELETE SET NULL,
+        prompt_id uuid REFERENCES agent_prompts (id) ON DELETE SET NULL,
 
-        -- Exact prompt version used
-        prompt_id uuid NOT NULL REFERENCES agent_prompts (id),
+        -- Snapshot taken at call time
+        agent_slug varchar(100) NOT NULL,
+        agent_name varchar(255) NOT NULL,
+        owner_id uuid NOT NULL,
+        prompt_version int NOT NULL,
+        system_prompt text NOT NULL,
 
         -- Exact model used
         model_id uuid REFERENCES llm_models (id),
@@ -216,6 +225,60 @@ STATEMENTS = [
     'CREATE INDEX IF NOT EXISTS idx_inference_requests_api_client_id ON inference_requests (api_client_id);',
     'CREATE INDEX IF NOT EXISTS idx_inference_requests_created_at ON inference_requests (created_at);',
     'CREATE INDEX IF NOT EXISTS idx_inference_requests_status ON inference_requests (status);',
+
+    # Upgrade for databases created before history was decoupled from agents:
+    # add the snapshot columns, fill them from the rows they still link to, then
+    # let the links go NULL instead of blocking the agent's deletion.
+    'ALTER TABLE inference_requests ADD COLUMN IF NOT EXISTS agent_slug varchar(100);',
+    'ALTER TABLE inference_requests ADD COLUMN IF NOT EXISTS agent_name varchar(255);',
+    'ALTER TABLE inference_requests ADD COLUMN IF NOT EXISTS owner_id uuid;',
+    'ALTER TABLE inference_requests ADD COLUMN IF NOT EXISTS prompt_version int;',
+    'ALTER TABLE inference_requests ADD COLUMN IF NOT EXISTS system_prompt text;',
+    """
+    UPDATE inference_requests ir
+    SET agent_slug = a.slug, agent_name = a.name, owner_id = a.owner_id
+    FROM agents a
+    WHERE a.id = ir.agent_id AND ir.agent_slug IS NULL;
+    """,
+    # Best effort for old rows: the prompt text as it reads now, which is the text
+    # that ran unless that version was edited in place since.
+    """
+    UPDATE inference_requests ir
+    SET prompt_version = ap.version, system_prompt = ap.system_prompt
+    FROM agent_prompts ap
+    WHERE ap.id = ir.prompt_id AND ir.system_prompt IS NULL;
+    """,
+    'ALTER TABLE inference_requests ALTER COLUMN agent_slug SET NOT NULL;',
+    'ALTER TABLE inference_requests ALTER COLUMN agent_name SET NOT NULL;',
+    'ALTER TABLE inference_requests ALTER COLUMN owner_id SET NOT NULL;',
+    'ALTER TABLE inference_requests ALTER COLUMN prompt_version SET NOT NULL;',
+    'ALTER TABLE inference_requests ALTER COLUMN system_prompt SET NOT NULL;',
+    'ALTER TABLE inference_requests ALTER COLUMN agent_id DROP NOT NULL;',
+    'ALTER TABLE inference_requests ALTER COLUMN prompt_id DROP NOT NULL;',
+    'ALTER TABLE inference_requests DROP CONSTRAINT IF EXISTS inference_requests_agent_id_fkey;',
+    'ALTER TABLE inference_requests ADD CONSTRAINT inference_requests_agent_id_fkey '
+    'FOREIGN KEY (agent_id) REFERENCES agents (id) ON DELETE SET NULL;',
+    'ALTER TABLE inference_requests DROP CONSTRAINT IF EXISTS inference_requests_prompt_id_fkey;',
+    'ALTER TABLE inference_requests ADD CONSTRAINT inference_requests_prompt_id_fkey '
+    'FOREIGN KEY (prompt_id) REFERENCES agent_prompts (id) ON DELETE SET NULL;',
+    'CREATE INDEX IF NOT EXISTS idx_inference_requests_owner_id ON inference_requests (owner_id);',
+
+    # History cannot be deleted — not through the API, and not by a stray
+    # DELETE/TRUNCATE either. Clearing it is a deliberate act: disable these
+    # triggers first.
+    """
+    CREATE OR REPLACE FUNCTION forbid_inference_request_delete() RETURNS trigger AS $$
+    BEGIN
+        RAISE EXCEPTION 'inference_requests is an audit log: rows cannot be deleted';
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    'DROP TRIGGER IF EXISTS inference_requests_no_delete ON inference_requests;',
+    'CREATE TRIGGER inference_requests_no_delete BEFORE DELETE ON inference_requests '
+    'FOR EACH ROW EXECUTE FUNCTION forbid_inference_request_delete();',
+    'DROP TRIGGER IF EXISTS inference_requests_no_truncate ON inference_requests;',
+    'CREATE TRIGGER inference_requests_no_truncate BEFORE TRUNCATE ON inference_requests '
+    'FOR EACH STATEMENT EXECUTE FUNCTION forbid_inference_request_delete();',
 ]
 
 
