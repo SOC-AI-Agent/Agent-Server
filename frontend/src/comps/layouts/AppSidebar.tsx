@@ -114,7 +114,7 @@ export function AppSidebar() {
 
     const sections: NavSection[] = [
         {
-            label: "ทั่วไป",
+            label: "Main",
             items: [
                 { id: "agents", label: "Agents", route: "/agents", icon: <IconRobot size={18} stroke={1.8} /> },
                 { id: "history", label: "History", route: "/history", icon: <IconHistory size={18} stroke={1.8} /> },
@@ -123,9 +123,9 @@ export function AppSidebar() {
         ...(user?.is_admin
             ? [
                   {
-                      label: "การจัดการ",
+                      label: "Management",
                       items: [
-                          { id: "users", label: "ผู้ใช้", route: "/users", icon: <IconUsers size={18} stroke={1.8} /> },
+                          { id: "users", label: "Users", route: "/users", icon: <IconUsers size={18} stroke={1.8} /> },
                       ],
                   },
               ]
