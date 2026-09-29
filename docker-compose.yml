@@ -37,6 +37,7 @@ services:
       LLAMA_HF_MODEL: ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
     depends_on:
       dall-m-db:
         condition: service_healthy
