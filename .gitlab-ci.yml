@@ -121,6 +121,35 @@ deploy_production:
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
   script:
+    - echo "========== 0. Required CI variables =========="
+    # Every value this deploy uses comes from Settings > CI/CD > Variables.
+    # .env.example's values are for a laptop (password123, dev-secret-change-me,
+    # localhost) and a deploy that fell back to them would come up looking
+    # fine. So a missing one stops the pipeline here, before anything is
+    # built or started, with every missing name listed at once.
+    #
+    # The seed steps below read these from the job's environment, not from
+    # .env (their container mounts only script/), so this check is also what
+    # keeps them from running with an empty DB_USER or model name.
+    #
+    # Optional, with working defaults in .env.example and overridable the
+    # same way: JWT_EXPIRE_MINUTES, LOG_LEVEL, NEXT_PUBLIC_BASE_PATH,
+    # LLAMA_HF_MODEL (step 2 below pins it rather than reading a variable).
+    # AGENT_ADMIN_PASSWORD (+ _USERNAME, _EMAIL) is optional on purpose — see
+    # step 3.
+    - |
+      missing=""
+      for key in DB_USER DB_PASSWORD DB_NAME JWT_SECRET \
+                 NEXT_PUBLIC_BASE_URL NEXT_PUBLIC_LLM_BASE_URL; do
+        eval "value=\${$key:-}"
+        [ -n "$value" ] || missing="$missing $key"
+      done
+      if [ -n "$missing" ]; then
+        echo "set these in Settings > CI/CD > Variables:$missing"
+        exit 1
+      fi
+      echo "  all set"
+
     - *write_env
     # Fixed rather than left to whatever GitLab names the checkout directory:
     # every docker compose call below, and the network name docker run needs
@@ -137,12 +166,26 @@ deploy_production:
     # Run from a throwaway container on the compose network rather than via
     # `compose exec`: script/ is not copied into the dall-m-server image (its
     # Dockerfile only COPYs app/), so there is nothing in that container to run.
+    #
+    # The DB_* below are the CI variables themselves (this container gets
+    # script/, not .env). Step 0 guarantees they are set; an empty one would
+    # reach os.getenv() as "set to empty", not "unset", and the scripts would
+    # log in as nobody.
+    #
+    # LLAMA_HF_MODEL is a literal, not a CI/CD variable: unlike a password or
+    # a URL it is not something that should differ by environment — everyone
+    # deploys the same small model for now. It has to be written here (not
+    # left unset to fall back to .env.example's value) because this container
+    # has no .env to fall back to; it must match LLAMA_HF_MODEL in
+    # .env.example and the dall-m-llamacpp service in docker-compose.yml
+    # (what is actually downloaded and served) — change the one on a model
+    # switch, change all three.
     - |
       docker run --rm --network agent-server_dall-m-net \
         -v "$PWD/script:/script:ro" -w /script \
         -e DB_HOST=dall-m-db -e DB_PORT=5432 \
         -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
-        -e LLAMA_HF_MODEL="$LLAMA_HF_MODEL" \
+        -e LLAMA_HF_MODEL="ggml-org/gemma-3-1b-it-GGUF" \
         python:3.12-slim sh -c "pip install --no-cache-dir -q -r requirements.txt \
           && python create_db.py && python insert_default_model.py"
 
