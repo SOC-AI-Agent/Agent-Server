@@ -57,6 +57,8 @@ stages:
 build_image:
   stage: build
   image: docker:latest
+  tags:
+    - test
   services:
     - docker:dind
   variables:
@@ -71,6 +73,8 @@ build_image:
 code_test:
   stage: test
   image: python:3.12
+  tags:
+    - test
   script:
     - cd server
     - pip install -q -r requirements.txt
@@ -85,6 +89,8 @@ code_test:
 frontend_test:
   stage: test
   image: node:20
+  tags:
+    - test
   script:
     - cd frontend
     - npm ci
@@ -109,7 +115,7 @@ deploy_production:
   # rather than a shared one. Change the tag if Agent-Server deploys to a
   # different host than the rest of the SOC stack.
   tags:
-    - soc-deploy
+    - llm
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
     DOCKER_TLS_CERTDIR: ""
