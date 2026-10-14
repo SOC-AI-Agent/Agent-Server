@@ -18,6 +18,7 @@
 stages:
   - build
   - test
+  - inspect
   - deploy
 
 # The office proxy, the runner host's only way to the internet. A CI/CD
@@ -134,6 +135,36 @@ frontend_test:
     - npm run build
   rules:
     - if: '$CI_COMMIT_BRANCH'
+
+# Which host ports the SOC stack publishes on this machine and what holds each
+# one, this host's addresses, and its packet filter. Read-only
+# (script/inspect-ports.sh, the same file as Backend's scripts/inspect-ports.sh). For a
+# port that answers on the host but times out from a browser, it shows whether
+# this host drops the packets or the network between does. By itself on main,
+# before deploy_production; a button (▶) on other protected branches. Never
+# stops a pipeline.
+inspect_ports:
+  stage: inspect
+  image: docker:latest
+  tags:
+    - llm
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_TLS_CERTDIR: ""
+  # Reads production without deploying to it; whoever may deploy to the
+  # protected "production" environment is who may run this.
+  environment:
+    name: production
+    action: access
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      allow_failure: true
+    - if: '$CI_COMMIT_REF_PROTECTED == "true"'
+      when: manual
+      allow_failure: true
+  script:
+    - sh script/inspect-ports.sh
 
 deploy_production:
   stage: deploy
