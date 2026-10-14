@@ -1,7 +1,7 @@
 // Client for the public agent-invocation surface (/v1/agents/...), which lives
 // outside the /restful-prefixed CRUD API and is called directly (no auth token).
 
-const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:8000";
+const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:8001";
 
 export interface AgentChatDone {
     latency_ms: number;

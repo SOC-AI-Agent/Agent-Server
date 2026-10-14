@@ -26,10 +26,11 @@ services:
       context: ./server
     restart: unless-stopped
     ports:
-      # The host side is SERVER_HOST_PORT (.env.example): 8000 is taken on the
-      # production host by the FastAPI-era stack's soc-backend. Whatever it is,
-      # NEXT_PUBLIC_BASE_URL below and AI-Service's LLM_SERVER_URL use it too.
-      - "${SERVER_HOST_PORT:-8000}:8000"
+      # 8001 on the host, not 8000: on the production host 8000 belongs to the
+      # FastAPI-era stack's soc-backend. NEXT_PUBLIC_BASE_URL below and
+      # AI-Service's LLM_SERVER_URL use the same port. SERVER_HOST_PORT
+      # (.env.example) moves it if 8001 is ever taken too.
+      - "${SERVER_HOST_PORT:-8001}:8000"
     environment:
       DB_HOST: dall-m-db
       DB_PORT: 5432
@@ -58,7 +59,7 @@ services:
     environment:
       # Reached from the browser on the host, so these stay as published host ports,
       # not the in-network service names (the frontend has no server-side data fetching).
-      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:8000}
+      NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:8001}
       NEXT_PUBLIC_BASE_PATH: ${NEXT_PUBLIC_BASE_PATH:-/restful}
       NEXT_PUBLIC_LLM_BASE_URL: ${NEXT_PUBLIC_LLM_BASE_URL:-http://localhost:8080}
     # Runs the code built into the image. On a laptop,

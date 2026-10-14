@@ -84,7 +84,7 @@ first start — this can take a few minutes depending on your connection; see
 | Service      | URL                                              |
 | ------------ | ------------------------------------------------- |
 | Frontend     | http://localhost:7100                             |
-| API          | http://localhost:8000 (interactive docs at `/docs`) |
+| API          | http://localhost:8001 (interactive docs at `/docs`) |
 | llama.cpp WebUI / API | http://localhost:8080                    |
 | PostgreSQL   | localhost:5497                                    |
 
@@ -132,7 +132,7 @@ via `python-dotenv`):
 | `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `dall-m-db` / `password123` / `dall-m-db` | Postgres container + server + scripts |
 | `JWT_SECRET`             | `dev-secret-change-me`            | server — signs auth tokens; **change before any non-local deployment** |
 | `JWT_EXPIRE_MINUTES`     | `1440`                            | server — session length |
-| `NEXT_PUBLIC_BASE_URL` / `NEXT_PUBLIC_BASE_PATH` / `NEXT_PUBLIC_LLM_BASE_URL` | `http://localhost:8000` / `/restful` / `http://localhost:8080` | frontend container (browser-facing, see below) |
+| `NEXT_PUBLIC_BASE_URL` / `NEXT_PUBLIC_BASE_PATH` / `NEXT_PUBLIC_LLM_BASE_URL` | `http://localhost:8001` / `/restful` / `http://localhost:8080` | frontend container (browser-facing, see below) |
 
 **`frontend/.env.local`** (only needed if you run the frontend standalone
 with `npm run dev` instead of via `docker compose` — see
@@ -263,7 +263,7 @@ defined in [`script/create_db.py`](script/create_db.py) (reference ERD at
 ## API overview
 
 Interactive docs (Swagger UI) are always available at
-http://localhost:8000/docs. At a glance:
+http://localhost:8001/docs. At a glance:
 
 | Prefix                        | Purpose                                                          |
 | -------------------------------- | -------------------------------------------------------------- |

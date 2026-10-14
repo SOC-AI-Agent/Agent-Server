@@ -35,7 +35,8 @@ docker compose up -d --build dall-m-server
 This builds the image from `server/Dockerfile` and starts it on the same
 `dall-m-net` network as `dall-m-db`, so the server can reach the database at
 host `dall-m-db`, port `5432`. The API is exposed on the host at
-`http://localhost:8000`.
+`http://localhost:8001` (`SERVER_HOST_PORT`); the examples below use
+8000, the port of a direct uvicorn run.
 
 To run the whole stack (db + server):
 
