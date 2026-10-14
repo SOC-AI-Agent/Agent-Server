@@ -20,6 +20,11 @@ stages:
   - test
   - deploy
 
+# The office proxy, the runner host's only way to the internet. A CI/CD
+# variable of the same name overrides this; an empty one turns the proxy off.
+variables:
+  BUILD_PROXY: "http://192.168.137.120:8080"
+
 
 # ── Reusable: write .env from CI variables ──────────────────────────────────
 #
@@ -54,19 +59,39 @@ stages:
     if eval "[ \"\${${key}+set}\" = set ]"; then echo "  $key"; fi
   done < .env.example
 
+# ── Reusable: the office proxy ──────────────────────────────────────────────
+#
+# Without it apt, npm, pip and prisma time out on the runner host ("Unable to
+# locate package"). Exported for the npm/pip a job runs itself, and handed to
+# `docker build` / `docker compose build` as PROXY_ARGS: a build does not
+# inherit the job's environment. These are Docker's predefined proxy build
+# args — no ARG line needed in any Dockerfile, and they stay out of the image's
+# history. Both spellings, because apt reads only the lowercase ones. Set inside
+# the script, after the checkout, so `git clone` never goes through the proxy.
+.proxy: &proxy |
+  p="${BUILD_PROXY:-}"
+  np="localhost,127.0.0.1"
+  export http_proxy="$p" https_proxy="$p" HTTP_PROXY="$p" HTTPS_PROXY="$p" \
+         no_proxy="$np" NO_PROXY="$np"
+  PROXY_ARGS="--build-arg http_proxy=$p --build-arg https_proxy=$p --build-arg HTTP_PROXY=$p --build-arg HTTPS_PROXY=$p --build-arg no_proxy=$np --build-arg NO_PROXY=$np"
+  if [ -n "$p" ]; then echo "proxy: on"; else echo "proxy: off (BUILD_PROXY is empty)"; fi
+
 build_image:
   stage: build
   image: docker:latest
   tags:
-    - test
-  services:
-    - docker:dind
+    - llm
+  # Builds on the runner host's own Docker daemon, through the socket the llm
+  # runner mounts — no docker:dind. One fixed tag, overwritten each run: the
+  # host is the production machine, and an image per commit would pile up on
+  # its disk.
   variables:
-    DOCKER_HOST: tcp://docker:2375
+    DOCKER_HOST: unix:///var/run/docker.sock
     DOCKER_TLS_CERTDIR: ""
   script:
-    - docker build -t dall-m-server:${CI_COMMIT_SHORT_SHA} ./server
-    - docker build -t dall-m-frontend:${CI_COMMIT_SHORT_SHA} ./frontend
+    - *proxy
+    - docker build $PROXY_ARGS -t dall-m-server:ci ./server
+    - docker build $PROXY_ARGS -t dall-m-frontend:ci ./frontend
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
@@ -74,8 +99,9 @@ code_test:
   stage: test
   image: python:3.12
   tags:
-    - test
+    - llm
   script:
+    - *proxy
     - cd server
     - pip install -q -r requirements.txt
     - python -c "import app.main"
@@ -90,8 +116,9 @@ frontend_test:
   stage: test
   image: node:20
   tags:
-    - test
+    - llm
   script:
+    - *proxy
     - cd frontend
     - npm ci
     # next build reads NEXT_PUBLIC_* at build time; throwaway values are fine —
@@ -165,7 +192,9 @@ deploy_production:
     - echo "========== 1. Build and start =========="
     # Bounded rather than left to hang: see the note at the top of this file
     # about dall-m-llamacpp having no healthcheck for dall-m-server to wait on.
-    - docker compose up -d --build --wait --wait-timeout 600
+    - *proxy
+    - docker compose build $PROXY_ARGS
+    - docker compose up -d --wait --wait-timeout 600
 
     - echo "========== 2. Database schema =========="
     # Idempotent (CREATE TABLE IF NOT EXISTS, upserts) — safe on every deploy.
@@ -189,6 +218,7 @@ deploy_production:
     - |
       docker run --rm --network agent-server_dall-m-net \
         -v "$PWD/script:/script:ro" -w /script \
+        -e http_proxy -e https_proxy -e no_proxy \
         -e DB_HOST=dall-m-db -e DB_PORT=5432 \
         -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
         -e LLAMA_HF_MODEL="ggml-org/gemma-3-1b-it-GGUF" \
@@ -204,6 +234,7 @@ deploy_production:
       if [ -n "${AGENT_ADMIN_PASSWORD:-}" ]; then
         docker run --rm --network agent-server_dall-m-net \
           -v "$PWD/script:/script:ro" -w /script \
+          -e http_proxy -e https_proxy -e no_proxy \
           -e DB_HOST=dall-m-db -e DB_PORT=5432 \
           -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
           python:3.12-slim sh -c "pip install --no-cache-dir -q -r requirements.txt \
