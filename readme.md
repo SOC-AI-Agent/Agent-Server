@@ -161,7 +161,9 @@ docker compose up -d --build dall-m-server
 
 **Frontend hot reload:** the `dall-m-frontend` container runs `next dev` with
 the `frontend/` folder bind-mounted in, so editing files on the host
-hot-reloads inside the container automatically — no rebuild needed.
+hot-reloads inside the container automatically — no rebuild needed. The mount
+is in `docker-compose.override.yml`, which `docker compose` loads by itself;
+the deploy job leaves it out and runs the code built into the image.
 
 **Backend hot reload:** the `dall-m-server` container runs a plain
 `uvicorn app.main:app` (no `--reload`, no bind mount) — after changing

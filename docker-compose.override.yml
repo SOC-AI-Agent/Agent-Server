@@ -1,0 +1,20 @@
+# Local development only. `docker compose` reads this file on top of
+# docker-compose.yml by itself, unless COMPOSE_FILE or -f names the files.
+# The deploy job sets COMPOSE_FILE=docker-compose.yml, so production never
+# loads it.
+#
+# Why production must not: the deploy job's docker commands run on the host's
+# Docker daemon, and a bind mount names a path on the host, where the job's
+# checkout is not. ./frontend would mount an empty directory over the app,
+# and next dev would find no package.json.
+
+services:
+  dall-m-frontend:
+    # Hot reload: frontend/ from this checkout over the copy in the image.
+    # node_modules and .next stay the container's own.
+    environment:
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next

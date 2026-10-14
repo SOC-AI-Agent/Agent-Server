@@ -191,6 +191,9 @@ deploy_production:
     # every docker compose call below, and the network name docker run needs
     # to join, depend on this being the same project name every time.
     - export COMPOSE_PROJECT_NAME=agent-server
+    # docker-compose.yml alone: docker-compose.override.yml is for a laptop
+    # (it bind-mounts frontend/, which does not exist on this host — see below).
+    - export COMPOSE_FILE=docker-compose.yml
 
     - echo "========== 1. Build and start =========="
     # Bounded rather than left to hang: see the note at the top of this file
@@ -213,14 +216,20 @@ deploy_production:
     # No model name here: insert_default_model.py registers whatever
     # dall-m-llamacpp reports serving (LLM_BASE_URL), which is what
     # llamacpp/preload_models.py chose.
+    #
+    # script/ goes in as a tar on stdin, not `-v "$PWD/script:/script"`: this
+    # docker run executes on the host's daemon, which resolves a bind mount
+    # against the host's filesystem, where this job's checkout is not. Docker
+    # then mounts an empty directory it made, and pip finds no
+    # requirements.txt. A tar through the client carries the files.
     - |
-      docker run --rm --network agent-server_dall-m-net \
-        -v "$PWD/script:/script:ro" -w /script \
+      tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
         -e http_proxy -e https_proxy -e no_proxy \
         -e DB_HOST=dall-m-db -e DB_PORT=5432 \
         -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
         -e LLM_BASE_URL=http://dall-m-llamacpp:8080 \
-        python:3.12-slim sh -c "pip install --no-cache-dir -q -r requirements.txt \
+        python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
+          && pip install --no-cache-dir -q -r requirements.txt \
           && python create_db.py && python insert_default_model.py"
 
     - echo "========== 3. Admin user =========="
@@ -230,12 +239,13 @@ deploy_production:
     # deploy. Set it once for the first deploy; leave it unset afterwards.
     - |
       if [ -n "${AGENT_ADMIN_PASSWORD:-}" ]; then
-        docker run --rm --network agent-server_dall-m-net \
-          -v "$PWD/script:/script:ro" -w /script \
+        # script/ as a tar on stdin, as in step 2.
+        tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
           -e http_proxy -e https_proxy -e no_proxy \
           -e DB_HOST=dall-m-db -e DB_PORT=5432 \
           -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
-          python:3.12-slim sh -c "pip install --no-cache-dir -q -r requirements.txt \
+          python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
+            && pip install --no-cache-dir -q -r requirements.txt \
             && python add_admin_user.py --username '${AGENT_ADMIN_USERNAME:-admin}' \
                  --email '${AGENT_ADMIN_EMAIL:-admin@example.com}' --password '$AGENT_ADMIN_PASSWORD'"
       else

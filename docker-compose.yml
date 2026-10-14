@@ -61,11 +61,8 @@ services:
       NEXT_PUBLIC_BASE_URL: ${NEXT_PUBLIC_BASE_URL:-http://localhost:8000}
       NEXT_PUBLIC_BASE_PATH: ${NEXT_PUBLIC_BASE_PATH:-/restful}
       NEXT_PUBLIC_LLM_BASE_URL: ${NEXT_PUBLIC_LLM_BASE_URL:-http://localhost:8080}
-      WATCHPACK_POLLING: "true"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
-      - /app/.next
+    # Runs the code built into the image. On a laptop,
+    # docker-compose.override.yml mounts ./frontend over it for hot reload.
     depends_on:
       - dall-m-server
     networks:
