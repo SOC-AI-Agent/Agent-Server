@@ -69,22 +69,29 @@ services:
     networks:
       - dall-m-net
 
-  # One-shot: downloads gemma-3-12b, Qwen2.5-14B and Qwen2.5-7B into the same
-  # ./data/models volume dall-m-llamacpp reads from, skipping any already there
-  # (see llamacpp/preload-models.sh) — so switching LLAMA_HF_MODEL to one of
-  # them later and recreating dall-m-llamacpp is instant, not a multi-GB
-  # download landing on whoever asks the agent right after. Runs once per
-  # `docker compose up`; a rerun with nothing missing does no network I/O.
+  # One-shot, before dall-m-llamacpp: downloads the model it serves
+  # (LLAMA_HF_MODEL) and any in PRELOAD_MODELS into ./data/models, skipping
+  # what is already there (llamacpp/preload_models.py). dall-m-llamacpp then
+  # starts --offline and reads only that cache. The download is Python's
+  # huggingface_hub, not llama-server's own, because llama-server ignores
+  # HTTPS_PROXY and the production host reaches Hugging Face only through the
+  # office proxy: the deploy job exports it, a laptop leaves it empty and goes
+  # direct. A rerun with nothing missing makes no network call.
   dall-m-model-preload:
     container_name: dall-m-model-preload
-    image: ghcr.io/ggml-org/llama.cpp:server
+    build:
+      context: ./llamacpp
+      dockerfile: Dockerfile.preload
     restart: "no"
-    entrypoint: ["bash", "/preload/preload-models.sh"]
     volumes:
       - ./data/models:/models
-      - ./llamacpp/preload-models.sh:/preload/preload-models.sh:ro
     environment:
       LLAMA_CACHE: /models
+      LLAMA_HF_MODEL: ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
+      PRELOAD_MODELS: ${PRELOAD_MODELS:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
     networks:
       - dall-m-net
 
@@ -98,8 +105,14 @@ services:
       - ./data/models:/models
     environment:
       LLAMA_CACHE: /models
+    # --offline: serve only what dall-m-model-preload put in the cache, never
+    # download here (this downloader cannot use the office proxy).
+    # --no-mmproj: the agents send text only, so no vision projector is needed
+    # or downloaded.
     command: >
       -hf ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
+      --offline
+      --no-mmproj
       --host 0.0.0.0
       --port 8080
     depends_on:

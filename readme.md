@@ -192,10 +192,16 @@ The `dall-m-llamacpp` service runs the official
 (`POST http://localhost:8080/v1/chat/completions`) and a built-in chat WebUI
 — no separate WebUI container needed.
 
-**Model weights** are auto-downloaded from Hugging Face on first start (per
-`LLAMA_HF_MODEL`) and cached under `./data/models` on the host (mounted to
-`/models` in the container), so they persist across restarts and aren't
-re-downloaded.
+**Model weights** are downloaded from Hugging Face by `dall-m-model-preload`
+(per `LLAMA_HF_MODEL`) before `dall-m-llamacpp` starts, and cached under
+`./data/models` on the host (mounted to `/models`), so they persist across
+restarts and aren't re-downloaded. `dall-m-llamacpp` itself runs `--offline`:
+it serves only what is in that cache and never downloads. The download is
+Python's `huggingface_hub` rather than llama-server's own downloader because
+llama-server ignores `HTTPS_PROXY`, and the production host reaches Hugging
+Face only through the office proxy (the deploy job exports it; on a laptop it
+is empty and the download goes direct). It runs with `--no-mmproj`: the
+agents send text only.
 
 To switch models, set `LLAMA_HF_MODEL` in `.env` — format is
 `<hf-user>/<hf-repo>[:quant]` (quant defaults to `Q4_K_M` if omitted), e.g.:
@@ -204,13 +210,16 @@ To switch models, set `LLAMA_HF_MODEL` in `.env` — format is
 LLAMA_HF_MODEL=bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M
 ```
 
-Then recreate the container and re-run the seed script so `llm_models`
-reflects the new model:
+Then bring the stack up again — the preload downloads the new model first —
+and re-run the seed script so `llm_models` reflects it:
 
 ```bash
-docker compose up -d --force-recreate dall-m-llamacpp
+docker compose up -d
 python script/insert_default_model.py
 ```
+
+In production the model name is also pinned in `.gitlab-ci.yml` (the seed
+step); change it there too.
 
 Alternatively, drop a `.gguf` file you already have into `./data/models` and
 edit the `command:` for `dall-m-llamacpp` in `docker-compose.yml` to use
@@ -218,31 +227,34 @@ edit the `command:` for `dall-m-llamacpp` in `docker-compose.yml` to use
 
 ### Preloading models
 
-`dall-m-model-preload` runs once, before `dall-m-llamacpp`, and downloads a
-fixed list of models into `./data/models` if they are not already there —
-currently `gemma-3-12b-it`, `Qwen2.5-14B-Instruct` and `Qwen2.5-7B-Instruct`,
-all `Q4_K_M` (see [`llamacpp/preload-models.sh`](llamacpp/preload-models.sh)
-for the exact repo strings). It never serves anything itself; it exists so
-that switching `LLAMA_HF_MODEL` to one of these and recreating
-`dall-m-llamacpp` is instant instead of a multi-GB download landing on
-whoever asks the agent right after:
+`dall-m-model-preload` runs once per `docker compose up`, before
+`dall-m-llamacpp`, and downloads `LLAMA_HF_MODEL` plus any models listed in
+`PRELOAD_MODELS` (comma-separated, same `<repo>[:quant]` format) into
+`./data/models`, skipping what is already there — a rerun with nothing
+missing makes no network call ([`llamacpp/preload_models.py`](llamacpp/preload_models.py)).
+For each model it takes the `.gguf` whose name carries the quant (`Q4_K_M`
+when none is given) and every shard of it, the same file `-hf` would pick.
+Preloading a model you might switch to makes the switch a restart instead of
+a multi-GB download landing on whoever asks the agent right after:
 
 ```bash
+# .env
+PRELOAD_MODELS=Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
 docker compose up -d --build   # preload runs, then dall-m-llamacpp starts
 
 # later, to switch:
-sed -i '' 's/^LLAMA_HF_MODEL=.*/LLAMA_HF_MODEL=Qwen\/Qwen2.5-14B-Instruct-GGUF:Q4_K_M/' .env
-docker compose up -d --force-recreate dall-m-llamacpp
-python script/insert_default_model.py --name Qwen2.5-14B \
-  --model-name Qwen/Qwen2.5-14B-Instruct-GGUF:Q4_K_M --provider llama.cpp
+sed -i '' 's/^LLAMA_HF_MODEL=.*/LLAMA_HF_MODEL=Qwen\/Qwen2.5-7B-Instruct-GGUF:Q4_K_M/' .env
+docker compose up -d
+python script/insert_default_model.py --name Qwen2.5-7B \
+  --model-name Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M --provider llama.cpp
 ```
 
-To preload a different or additional model, add a line to the `MODELS` array
-in `llamacpp/preload-models.sh` — nothing in `docker-compose.yml` needs to
-change. It only ever serves one model at a time (`dall-m-server`'s
-`LLM_BASE_URL` points at one fixed `host:port`); the comment beside
-`dall-m-llamacpp` in `docker-compose.yml` says what serving a second one
-concurrently would additionally need.
+If a download fails (no route to Hugging Face, a proxy that refuses, a quant
+the repo does not have) the preload exits with the reason and
+`dall-m-llamacpp` does not start. It only ever serves one model at a time
+(`dall-m-server`'s `LLM_BASE_URL` points at one fixed `host:port`); the
+comment beside `dall-m-llamacpp` in `docker-compose.yml` says what serving a
+second one concurrently would additionally need.
 
 ## Database
 

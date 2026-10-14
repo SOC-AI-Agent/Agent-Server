@@ -92,6 +92,7 @@ build_image:
     - *proxy
     - docker build $PROXY_ARGS -t dall-m-server:ci ./server
     - docker build $PROXY_ARGS -t dall-m-frontend:ci ./frontend
+    - docker build $PROXY_ARGS -t dall-m-model-preload:ci -f llamacpp/Dockerfile.preload ./llamacpp
   rules:
     - if: '$CI_COMMIT_BRANCH'
 
