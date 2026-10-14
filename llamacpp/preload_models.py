@@ -13,9 +13,9 @@ Which files, for "<org>/<repo>[:quant]" — the choice llama-server makes for
 every shard of it when the model is split. No mmproj: dall-m-llamacpp runs
 with --no-mmproj, the agents send text only.
 
-Models: LLAMA_HF_MODEL, the one served, plus any in PRELOAD_MODELS
-(comma-separated), so switching to one of those later is a restart rather than
-a multi-GB download. A model already in the cache costs no network call.
+Last, MODEL is written to served-model in the cache. dall-m-llamacpp reads
+that file for its -hf, and insert_default_model.py registers whatever
+llama-server reports serving, so nothing else names the model.
 """
 
 import os
@@ -23,7 +23,20 @@ import re
 import sys
 from pathlib import Path
 
+# ── The model ────────────────────────────────────────────────────────────────
+# The one place it is chosen. "<org>/<repo>[:quant]" of a Hugging Face repo of
+# .gguf files, e.g. "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M" — not
+# an Ollama name like "llama3.1:8b". Change it, deploy, and the preload image
+# is rebuilt, the model downloaded, and dall-m-llamacpp restarted on it
+# (depends_on ... restart: true in docker-compose.yml).
+MODEL = "ggml-org/gemma-3-1b-it-GGUF"
+
+# Downloaded as well but not served, same format: switching MODEL to one of
+# these later is a restart rather than a multi-GB download.
+ALSO_DOWNLOAD: list[str] = []
+
 CACHE = Path(os.environ.get("LLAMA_CACHE", "/models"))
+SERVED = CACHE / "served-model"
 DEFAULT_QUANT = "Q4_K_M"
 SHARD = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
 
@@ -77,12 +90,10 @@ def cached(repo: str, quant: str) -> list[str]:
 
 
 def main() -> int:
-    specs = [os.environ.get("LLAMA_HF_MODEL", "")]
-    specs += os.environ.get("PRELOAD_MODELS", "").split(",")
-    models = list(dict.fromkeys(parse(s) for s in specs if s.strip()))
-    if not models:
-        print("preload: LLAMA_HF_MODEL is empty — nothing to download", file=sys.stderr)
+    if not MODEL.strip():
+        print("preload: MODEL is empty — set it at the top of this file", file=sys.stderr)
         return 1
+    models = list(dict.fromkeys(parse(s) for s in [MODEL, *ALSO_DOWNLOAD] if s.strip()))
 
     proxy = os.environ.get("HTTPS_PROXY") or os.environ.get("https_proxy")
     for repo, quant in models:
@@ -107,7 +118,13 @@ def main() -> int:
             return 1
         print(f"preload: {repo}:{quant} done")
 
-    print("preload: all models ready")
+    # As written, quant or not: llama-server reports serving exactly this, and
+    # that is the name insert_default_model.py registers. Replaced in one step,
+    # so dall-m-llamacpp never reads half a name.
+    tmp = SERVED.with_name(SERVED.name + ".tmp")
+    tmp.write_text(MODEL.strip() + "\n")
+    tmp.replace(SERVED)
+    print(f"preload: all models ready — serving {MODEL.strip()}")
     return 0
 
 

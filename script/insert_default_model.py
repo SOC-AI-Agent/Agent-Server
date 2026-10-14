@@ -1,16 +1,20 @@
 """
 Insert the default LLM model into the llm_models table.
 
-Defaults match the llama.cpp service in docker-compose.yml (LLAMA_HF_MODEL).
+The default is whatever llama-server is serving, asked from it
+(GET <LLM_BASE_URL>/v1/models) — so run this once dall-m-llamacpp is up.
+Which model that is is chosen in llamacpp/preload_models.py and nowhere else.
 
 Usage:
     python script/insert_default_model.py
-    python script/insert_default_model.py --name Gemma3-1B --model-name ggml-org/gemma-3-1b-it-GGUF --provider llama.cpp
+    python script/insert_default_model.py --name "<label>" --model-name <org>/<repo> --provider llama.cpp
 """
 
 import argparse
+import json
 import os
 import sys
+import urllib.request
 from pathlib import Path
 
 import psycopg2
@@ -25,7 +29,7 @@ DB_USER = os.getenv("DB_USER")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_NAME = os.getenv("DB_NAME")
 
-DEFAULT_MODEL_NAME = os.getenv("LLAMA_HF_MODEL", "ggml-org/gemma-3-1b-it-GGUF")
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080")
 DEFAULT_PROVIDER = "llama.cpp"
 
 SELECT_MODEL_SQL = "SELECT id FROM llm_models WHERE model_name = %s;"
@@ -47,16 +51,32 @@ INSERT_MODEL_SQL = """
 """
 
 
+def served_model() -> str:
+    """The model llama-server reports serving — the name it was started with.
+    Never through a proxy: llama-server is on this machine or this compose
+    network, and an office proxy in the environment cannot reach either."""
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    with opener.open(f"{LLM_BASE_URL}/v1/models", timeout=30) as response:
+        return json.load(response)["data"][0]["id"]
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Insert/update the default LLM model.")
-    parser.add_argument("--name", default=DEFAULT_MODEL_NAME)
-    parser.add_argument("--model-name", default=DEFAULT_MODEL_NAME)
+    parser.add_argument("--name", help="label shown for it; defaults to the model name")
+    parser.add_argument("--model-name", help="defaults to what llama-server is serving")
     parser.add_argument("--provider", default=DEFAULT_PROVIDER)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
+    if not args.model_name:
+        try:
+            args.model_name = served_model()
+        except Exception as exc:
+            raise SystemExit(f"Could not ask llama-server at {LLM_BASE_URL} what it serves ({exc}). "
+                             "Is dall-m-llamacpp up? Or pass --model-name.")
+    args.name = args.name or args.model_name
 
     if not all([DB_USER, DB_PASSWORD, DB_NAME]):
         raise SystemExit("Missing DB_USER, DB_PASSWORD, or DB_NAME. Check your .env file.")

@@ -132,7 +132,6 @@ via `python-dotenv`):
 | `DB_USER` / `DB_PASSWORD` / `DB_NAME` | `dall-m-db` / `password123` / `dall-m-db` | Postgres container + server + scripts |
 | `JWT_SECRET`             | `dev-secret-change-me`            | server — signs auth tokens; **change before any non-local deployment** |
 | `JWT_EXPIRE_MINUTES`     | `1440`                            | server — session length |
-| `LLAMA_HF_MODEL`         | `ggml-org/gemma-3-1b-it-GGUF`     | llama.cpp — model to download/serve; also used to seed `llm_models` |
 | `NEXT_PUBLIC_BASE_URL` / `NEXT_PUBLIC_BASE_PATH` / `NEXT_PUBLIC_LLM_BASE_URL` | `http://localhost:8000` / `/restful` / `http://localhost:8080` | frontend container (browser-facing, see below) |
 
 **`frontend/.env.local`** (only needed if you run the frontend standalone
@@ -193,7 +192,7 @@ The `dall-m-llamacpp` service runs the official
 — no separate WebUI container needed.
 
 **Model weights** are downloaded from Hugging Face by `dall-m-model-preload`
-(per `LLAMA_HF_MODEL`) before `dall-m-llamacpp` starts, and cached under
+before `dall-m-llamacpp` starts, and cached under
 `./data/models` on the host (mounted to `/models`), so they persist across
 restarts and aren't re-downloaded. `dall-m-llamacpp` itself runs `--offline`:
 it serves only what is in that cache and never downloads. The download is
@@ -203,50 +202,45 @@ Face only through the office proxy (the deploy job exports it; on a laptop it
 is empty and the download goes direct). It runs with `--no-mmproj`: the
 agents send text only.
 
-To switch models, set `LLAMA_HF_MODEL` in `.env` — format is
-`<hf-user>/<hf-repo>[:quant]` (quant defaults to `Q4_K_M` if omitted), e.g.:
+**Which model** is set in one place: `MODEL` at the top of
+[`llamacpp/preload_models.py`](llamacpp/preload_models.py) — not `.env`, not
+`.gitlab-ci.yml`. Format `<hf-user>/<hf-repo>[:quant]` (quant defaults to
+`Q4_K_M` if omitted), e.g.:
 
-```
-LLAMA_HF_MODEL=bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M
+```python
+MODEL = "bartowski/Meta-Llama-3.1-8B-Instruct-GGUF:Q4_K_M"
 ```
 
-Then bring the stack up again — the preload downloads the new model first —
-and re-run the seed script so `llm_models` reflects it:
+Then rebuild and re-run the seed script so `llm_models` lists it (in
+production the deploy job does both):
 
 ```bash
-docker compose up -d
+docker compose up -d --build
 python script/insert_default_model.py
 ```
 
-In production the model name is also pinned in `.gitlab-ci.yml` (the seed
-step); change it there too.
-
-Alternatively, drop a `.gguf` file you already have into `./data/models` and
-edit the `command:` for `dall-m-llamacpp` in `docker-compose.yml` to use
-`-m /models/<your-file>.gguf` instead of `-hf`.
+The preload image is rebuilt with the new `MODEL`, downloads it, and writes
+its name to `./data/models/served-model`; `dall-m-llamacpp` reads that file
+for its `-hf` and is restarted after the preload (`depends_on` with
+`restart: true`). `insert_default_model.py` asks llama-server what it serves
+(`GET /v1/models`), so it needs no name either. Agents that point at the old
+model keep working — llama-server answers with the model it has whatever a
+request names — but edit them in the admin UI to pick the new one, or their
+history keeps the old name.
 
 ### Preloading models
 
 `dall-m-model-preload` runs once per `docker compose up`, before
-`dall-m-llamacpp`, and downloads `LLAMA_HF_MODEL` plus any models listed in
-`PRELOAD_MODELS` (comma-separated, same `<repo>[:quant]` format) into
-`./data/models`, skipping what is already there — a rerun with nothing
-missing makes no network call ([`llamacpp/preload_models.py`](llamacpp/preload_models.py)).
+`dall-m-llamacpp`, and downloads `MODEL` plus any listed in `ALSO_DOWNLOAD`
+(same file, same `<repo>[:quant]` format) into `./data/models`, skipping what
+is already there — a rerun with nothing missing makes no network call.
 For each model it takes the `.gguf` whose name carries the quant (`Q4_K_M`
 when none is given) and every shard of it, the same file `-hf` would pick.
-Preloading a model you might switch to makes the switch a restart instead of
-a multi-GB download landing on whoever asks the agent right after:
+Downloading a model you might switch to ahead of time makes the switch a
+restart instead of a multi-GB download:
 
-```bash
-# .env
-PRELOAD_MODELS=Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M
-docker compose up -d --build   # preload runs, then dall-m-llamacpp starts
-
-# later, to switch:
-sed -i '' 's/^LLAMA_HF_MODEL=.*/LLAMA_HF_MODEL=Qwen\/Qwen2.5-7B-Instruct-GGUF:Q4_K_M/' .env
-docker compose up -d
-python script/insert_default_model.py --name Qwen2.5-7B \
-  --model-name Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M --provider llama.cpp
+```python
+ALSO_DOWNLOAD = ["Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M"]
 ```
 
 If a download fails (no route to Hugging Face, a proxy that refuses, a quant

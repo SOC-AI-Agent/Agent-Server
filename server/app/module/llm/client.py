@@ -7,7 +7,14 @@ import httpx
 # In docker-compose, dall-m-server reaches the llama.cpp service by its
 # container name; for local (non-docker) runs it falls back to localhost.
 LLM_BASE_URL = os.getenv("LLM_BASE_URL", "http://localhost:8080")
-LLM_MODEL = os.getenv("LLAMA_HF_MODEL", "ggml-org/gemma-3-1b-it-GGUF")
+
+
+def _model(model_name: Optional[str]) -> dict:
+    """The agent's model, if it has one. llama-server serves one model and
+    answers with it whatever is named here, so without one the field is left
+    out rather than filled with a guess — which model that is is set in
+    llamacpp/preload_models.py only."""
+    return {"model": model_name} if model_name else {}
 
 
 async def stream_chat(
@@ -18,7 +25,7 @@ async def stream_chat(
     """Stream a chat completion. Yields {"delta": str | None, "usage": dict | None} per SSE chunk
     (llama.cpp/OpenAI servers send the usage totals on the final chunk when supported)."""
     payload = {
-        "model": model_name or LLM_MODEL,
+        **_model(model_name),
         "messages": messages,
         "stream": True,
         "stream_options": {"include_usage": True},
@@ -49,7 +56,7 @@ async def get_chat(
 ) -> dict:
     """Non-streaming chat completion. Returns {"content": str, "usage": dict | None}."""
     payload = {
-        "model": model_name or LLM_MODEL,
+        **_model(model_name),
         "messages": messages,
         "stream": False,
         **gen_params,

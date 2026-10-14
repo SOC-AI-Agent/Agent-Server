@@ -164,13 +164,15 @@ deploy_production:
     #
     # The seed steps below read these from the job's environment, not from
     # .env (their container mounts only script/), so this check is also what
-    # keeps them from running with an empty DB_USER or model name.
+    # keeps them from running with an empty DB_USER.
     #
     # Optional, with working defaults in .env.example and overridable the
     # same way: JWT_EXPIRE_MINUTES, LOG_LEVEL, NEXT_PUBLIC_BASE_PATH,
-    # LLAMA_HF_MODEL (step 2 below pins it rather than reading a variable).
+    # SERVER_HOST_PORT (8000 is taken on the production host — see
+    # .env.example).
     # AGENT_ADMIN_PASSWORD (+ _USERNAME, _EMAIL) is optional on purpose — see
-    # step 3.
+    # step 3. The model is not a variable at all: it is chosen at the top of
+    # llamacpp/preload_models.py.
     - |
       missing=""
       for key in DB_USER DB_PASSWORD DB_NAME JWT_SECRET \
@@ -208,21 +210,16 @@ deploy_production:
     # reach os.getenv() as "set to empty", not "unset", and the scripts would
     # log in as nobody.
     #
-    # LLAMA_HF_MODEL is a literal, not a CI/CD variable: unlike a password or
-    # a URL it is not something that should differ by environment — everyone
-    # deploys the same small model for now. It has to be written here (not
-    # left unset to fall back to .env.example's value) because this container
-    # has no .env to fall back to; it must match LLAMA_HF_MODEL in
-    # .env.example and the dall-m-llamacpp service in docker-compose.yml
-    # (what is actually downloaded and served) — change the one on a model
-    # switch, change all three.
+    # No model name here: insert_default_model.py registers whatever
+    # dall-m-llamacpp reports serving (LLM_BASE_URL), which is what
+    # llamacpp/preload_models.py chose.
     - |
       docker run --rm --network agent-server_dall-m-net \
         -v "$PWD/script:/script:ro" -w /script \
         -e http_proxy -e https_proxy -e no_proxy \
         -e DB_HOST=dall-m-db -e DB_PORT=5432 \
         -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
-        -e LLAMA_HF_MODEL="ggml-org/gemma-3-1b-it-GGUF" \
+        -e LLM_BASE_URL=http://dall-m-llamacpp:8080 \
         python:3.12-slim sh -c "pip install --no-cache-dir -q -r requirements.txt \
           && python create_db.py && python insert_default_model.py"
 

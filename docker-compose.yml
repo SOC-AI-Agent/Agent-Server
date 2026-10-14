@@ -26,7 +26,10 @@ services:
       context: ./server
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      # The host side is SERVER_HOST_PORT (.env.example): 8000 is taken on the
+      # production host by the FastAPI-era stack's soc-backend. Whatever it is,
+      # NEXT_PUBLIC_BASE_URL below and AI-Service's LLM_SERVER_URL use it too.
+      - "${SERVER_HOST_PORT:-8000}:8000"
     environment:
       DB_HOST: dall-m-db
       DB_PORT: 5432
@@ -34,7 +37,6 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       LLM_BASE_URL: http://dall-m-llamacpp:8080
-      LLAMA_HF_MODEL: ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -69,9 +71,11 @@ services:
     networks:
       - dall-m-net
 
-  # One-shot, before dall-m-llamacpp: downloads the model it serves
-  # (LLAMA_HF_MODEL) and any in PRELOAD_MODELS into ./data/models, skipping
-  # what is already there (llamacpp/preload_models.py). dall-m-llamacpp then
+  # One-shot, before dall-m-llamacpp: downloads the model it serves and any
+  # others listed into ./data/models, skipping what is already there, and
+  # writes the served one's name to ./data/models/served-model. Which model is
+  # chosen at the top of llamacpp/preload_models.py, nowhere else; it is built
+  # into this image, so changing it is a rebuild. dall-m-llamacpp then
   # starts --offline and reads only that cache. The download is Python's
   # huggingface_hub, not llama-server's own, because llama-server ignores
   # HTTPS_PROXY and the production host reaches Hugging Face only through the
@@ -82,13 +86,16 @@ services:
     build:
       context: ./llamacpp
       dockerfile: Dockerfile.preload
+      # No provenance attestation: it carries the build time, so every deploy
+      # would make a new image even with nothing changed, and dall-m-llamacpp
+      # (restart: true below) would restart each time instead of only when
+      # the model changes.
+      provenance: false
     restart: "no"
     volumes:
       - ./data/models:/models
     environment:
       LLAMA_CACHE: /models
-      LLAMA_HF_MODEL: ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
-      PRELOAD_MODELS: ${PRELOAD_MODELS:-}
       HTTPS_PROXY: ${HTTPS_PROXY:-}
       HTTP_PROXY: ${HTTP_PROXY:-}
       NO_PROXY: ${NO_PROXY:-}
@@ -105,25 +112,31 @@ services:
       - ./data/models:/models
     environment:
       LLAMA_CACHE: /models
+    # -hf: the model dall-m-model-preload wrote to served-model, read at each
+    # start through a shell (the image's own entrypoint is llama-server, which
+    # cannot read a file for an argument). exec keeps llama-server PID 1, so
+    # it gets the stop signal itself.
     # --offline: serve only what dall-m-model-preload put in the cache, never
     # download here (this downloader cannot use the office proxy).
     # --no-mmproj: the agents send text only, so no vision projector is needed
     # or downloaded.
-    command: >
-      -hf ${LLAMA_HF_MODEL:-ggml-org/gemma-3-1b-it-GGUF}
-      --offline
-      --no-mmproj
-      --host 0.0.0.0
-      --port 8080
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - exec /app/llama-server -hf "$$(cat /models/served-model)" --offline --no-mmproj --host 0.0.0.0 --port 8080
     depends_on:
+      # restart: true — when the preload is rebuilt (the model changed), this
+      # is restarted after it, onto the new served-model. A deploy that
+      # changes nothing leaves it running.
       dall-m-model-preload:
         condition: service_completed_successfully
+        restart: true
     networks:
       - dall-m-net
     # Serves only this one model at a time — dall-m-server's LLM_BASE_URL points
     # at one fixed host:port. To serve a second model concurrently rather than
     # switching by recreating this container: copy this block (new
-    # container_name, a second host port, and its own -hf), then give
+    # container_name, a second host port, and its own -hf rather than
+    # served-model), then give
     # dall-m-server a way to pick which of the two to call per agent — today it
     # has exactly one LLM_BASE_URL, so that part is still a real change, not
     # just a compose addition. Both instances would read the same
