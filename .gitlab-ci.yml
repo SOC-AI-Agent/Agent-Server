@@ -149,9 +149,13 @@ deploy_production:
     DOCKER_TLS_CERTDIR: ""
   environment:
     name: production
-    # The admin UI — what a person actually opens. The API this repo also
-    # serves is the same host on :8000 (see readme.md).
-    url: '$AGENT_SERVER_URL'
+    # The admin UI — what a person actually opens — at the address step 5
+    # found answering, handed over in deploy.env.
+    url: '$DYNAMIC_ENVIRONMENT_URL'
+  # deploy.env holds that one URL and nothing else — never .env.
+  artifacts:
+    reports:
+      dotenv: deploy.env
   rules:
     - if: '$CI_COMMIT_BRANCH == "main"'
   script:
@@ -285,18 +289,73 @@ deploy_production:
 
     - echo "========== 4. Health =========="
     - |
+      healthy=""
       for i in $(seq 1 30); do
         if docker compose exec -T dall-m-server python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8000/',timeout=5).status==200 else 1)" 2>/dev/null; then
-          echo "healthy"
-          echo ""
-          echo "The three SOC agents (soc-suggest, soc-requirements, soc-conclude) are"
-          echo "not created by this pipeline — create or update them by hand at the"
-          echo "admin UI (\$AGENT_SERVER_URL) or POST /restful/agents, the same way a"
-          echo "first admin is provisioned by hand elsewhere in this stack."
-          exit 0
+          healthy=yes; break
         fi
         sleep 4
       done
-      echo "dall-m-server did not become healthy within 2 minutes"
-      docker compose logs --tail 50 dall-m-server dall-m-llamacpp
-      exit 1
+      if [ -z "$healthy" ]; then
+        echo "dall-m-server did not become healthy within 2 minutes"
+        docker compose logs --tail 50 dall-m-server dall-m-llamacpp
+        exit 1
+      fi
+      echo "healthy inside the container"
+
+    - echo "========== 5. Address =========="
+    # Where each part answers from outside, asked the way a browser and
+    # AI-Service will ask — this host's address and the published port — so a
+    # port that is published but not reachable fails here too.
+    #
+    # The ports are what Docker published. The IP is the one this host sends
+    # from on its default route, read from a throwaway container on the host's
+    # network (this job's own container has another); the CI variable
+    # DEPLOY_HOST overrides it — a DNS name, or another interface's address.
+    # The admin UI is `next dev`, which compiles a page on its first request:
+    # hence its longer wait.
+    #
+    # NEXT_PUBLIC_BASE_URL and NEXT_PUBLIC_LLM_BASE_URL are what the admin UI,
+    # in the browser, calls: a port other than the published one is reported.
+    - |
+      published() { docker compose port "$1" "$2" | sed -n '1s/.*://p'; }
+      api_port=$(published dall-m-server 8000)
+      ui_port=$(published dall-m-frontend 7100)
+      llm_port=$(published dall-m-llamacpp 8080)
+      host="${DEPLOY_HOST:-}"
+      if [ -z "$host" ]; then
+        host=$(docker run --rm --network host --entrypoint sh "$CI_JOB_IMAGE" -c '
+          { ip route get 1.1.1.1 2>/dev/null | sed -n "s/.* src \([0-9.]*\).*/\1/p"
+            ip -4 -o addr show scope global | grep -v -E " (docker0|br-|veth)" | sed -n "s/.* inet \([0-9.]*\).*/\1/p"
+          } | head -n 1')
+      fi
+      ask() { docker run --rm --network host --entrypoint wget "$CI_JOB_IMAGE" -qO- -T "$2" "$1"; }
+      echo "Admin UI     http://$host:$ui_port"
+      echo "API          http://$host:$api_port        (docs: /docs)"
+      echo "llama.cpp    http://$host:$llm_port"
+      echo "AI-Service   LLM_SERVER_URL=http://host.docker.internal:$api_port"
+      failed=""
+      for check in "API|http://$host:$api_port/|15" "llama.cpp|http://$host:$llm_port/health|15" "Admin UI|http://$host:$ui_port/|120"; do
+        name=${check%%|*}; rest=${check#*|}; url=${rest%|*}; secs=${rest##*|}
+        if ask "$url" "$secs" >/dev/null; then echo "  $name answers at $url"
+        else echo "  $name does NOT answer at $url"; failed=yes; fi
+      done
+      for pair in "NEXT_PUBLIC_BASE_URL|${NEXT_PUBLIC_BASE_URL:-}|$api_port" "NEXT_PUBLIC_LLM_BASE_URL|${NEXT_PUBLIC_LLM_BASE_URL:-}|$llm_port"; do
+        name=${pair%%|*}; rest=${pair#*|}; value=${rest%|*}; port=${rest##*|}
+        case "$value" in
+          *:"$port"|*:"$port"/*) ;;
+          *) echo "  WARNING: $name is $value — the admin UI will call that, but the port published is $port" ;;
+        esac
+      done
+      if [ -n "$failed" ]; then
+        echo "Published but not reachable at $host. Set DEPLOY_HOST if clients reach"
+        echo "this host by another name or interface."
+        docker compose logs --tail 20 dall-m-server dall-m-llamacpp dall-m-frontend
+        exit 1
+      fi
+      echo "DYNAMIC_ENVIRONMENT_URL=http://$host:$ui_port" > deploy.env
+      echo ""
+      echo "The three SOC agents (soc-suggest, soc-requirements, soc-conclude) are"
+      echo "not created by this pipeline — create or update them by hand at the"
+      echo "admin UI above or POST /restful/agents, the same way a first admin is"
+      echo "provisioned by hand elsewhere in this stack."
