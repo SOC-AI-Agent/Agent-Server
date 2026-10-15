@@ -164,6 +164,34 @@ inspect_ports:
   script:
     - sh script/inspect-ports.sh
 
+# What this host has and how much is in use: CPU (cores, model, busy share,
+# load), GPU (and whether llama.cpp could use it), RAM and swap, and storage —
+# the model cache's disk, what else is on it (Docker's images and build cache),
+# every filesystem, disk and LVM volume group. Read-only
+# (script/inspect-host.sh); nothing is pruned or moved. By itself on main,
+# before deploy_production; a button (▶) on other protected branches. Never
+# stops a pipeline.
+inspect_host:
+  stage: inspect
+  image: docker:latest
+  tags:
+    - llm
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_TLS_CERTDIR: ""
+  environment:
+    name: production
+    action: access
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+      allow_failure: true
+    - if: '$CI_COMMIT_REF_PROTECTED == "true"'
+      when: manual
+      allow_failure: true
+  script:
+    - sh script/inspect-host.sh
+
 # When the admin UI will not let someone in. Press ▶ after a failed attempt:
 #   - the users there are: names and flags, never passwords
 #   - whether AGENT_ADMIN_USERNAME / AGENT_ADMIN_PASSWORD log in
@@ -514,15 +542,35 @@ deploy_production:
     # deploy that finds it still downloading leaves it be (same image); a
     # finished one checks the cache and stops in seconds. Only here: the
     # service is in the "production" profile, so a laptop never starts it.
-    # What it says in its first seconds is shown below — which models are
-    # cached, which are downloading, which were skipped for disk space. The
-    # next deploy shows the state again. Not a reason to fail the deploy: the
-    # stack is up and checked by now.
+    # It first deletes the models preload_models.py no longer names, then
+    # says, per model, cached / downloading / skipped for disk space.
+    #
+    # Shown: this run's output only (`--since` — the container is restarted,
+    # not recreated, so its log holds every earlier deploy's run too), after
+    # waiting up to a minute for it to finish. Skipped for space, docker's own
+    # disk use follows: what else on the host could make room. That is a
+    # report only; nothing outside the model cache is deleted. Not a reason to
+    # fail the deploy: the stack is up and checked by now.
     - |
+      since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
       if docker compose --profile production build $PROXY_ARGS dall-m-model-extra \
          && docker compose --profile production up -d dall-m-model-extra; then
-        sleep 20
-        docker compose --profile production logs --no-log-prefix --tail 20 dall-m-model-extra
+        for i in $(seq 1 12); do
+          [ "$(docker inspect -f '{{.State.Running}}' dall-m-model-extra)" = true ] || break
+          sleep 5
+        done
+        log=$(docker logs --since "$since" dall-m-model-extra 2>&1 | grep -v '^ *$' | tail -n 30 || true)
+        echo "${log:-(nothing new: still on a download an earlier deploy started)}"
+        case "$(docker inspect -f '{{.State.Running}} {{.State.ExitCode}}' dall-m-model-extra)" in
+          true*) echo "-> still downloading in the background: the admin UI's Resources page shows the cache" ;;
+          "false 0") echo "-> every model in ALSO_DOWNLOAD is in the cache" ;;
+          *) echo "-> not every model in ALSO_DOWNLOAD is in the cache (reason above)"
+             case "$log" in *SKIPPED*)
+               echo "Docker's disk use on this host (RECLAIMABLE: what pruning could free):"
+               docker system df
+               echo "The whole host — every disk, and what sits on which: the inspect_host job." ;;
+             esac ;;
+        esac
       else
         echo "the background download did not start (see above); the stack itself is up"
       fi

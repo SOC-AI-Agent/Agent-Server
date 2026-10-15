@@ -25,9 +25,10 @@ Two runs of it:
                  a download.
   --also         dall-m-model-extra, production only (compose profile
                  "production", which the deploy job starts last, in the
-                 background): the models in ALSO_DOWNLOAD, each only if the
-                 disk has room for it. Nothing waits on it. A laptop never runs
-                 it, so these never land on one.
+                 background): first drops from the cache every model this file
+                 no longer names, then fetches the models in ALSO_DOWNLOAD,
+                 each only if the disk has room for it. Nothing waits on it. A
+                 laptop never runs it, so these never land on one.
 """
 
 import os
@@ -49,9 +50,11 @@ MODEL = "Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M"
 # Downloaded as well but not served, same format, on the production host only
 # (see --also above): switching MODEL to one of these later is a restart rather
 # than a multi-GB download. Sizes are Q4_K_M, roughly.
+# MODEL and this list are what the production cache keeps: a model taken out of
+# both is deleted there by the next deploy, to make room for the others. To
+# keep the old MODEL around after changing it, list it here.
 ALSO_DOWNLOAD: list[str] = [
     "ggml-org/gemma-3-12b-it-GGUF:Q4_K_M",    # ~7.3 GB
-    "Qwen/Qwen2.5-14B-Instruct-GGUF:Q4_K_M",  # ~9 GB, 3 shards
 ]
 
 CACHE = Path(os.environ.get("LLAMA_CACHE", "/models"))
@@ -115,6 +118,31 @@ def gb(n: int) -> str:
     return f"{n / 1024**3:.1f} GB"
 
 
+def repo_dir(repo: str) -> Path:
+    return CACHE / f"models--{repo.replace('/', '--')}"
+
+
+def still_missing(repo: str, sibling) -> int:
+    """Bytes of this file not on disk yet. A blob already there costs nothing,
+    and an interrupted one (<sha256>.incomplete) only its remainder: that is
+    where hf_hub_download picks up again."""
+    size = sibling.size or 0
+    lfs = sibling.lfs
+    sha = (lfs.get("sha256") if isinstance(lfs, dict) else getattr(lfs, "sha256", None)) if lfs else None
+    if not sha:
+        return size
+    blob = repo_dir(repo) / "blobs" / sha
+    if blob.exists():
+        return 0
+    part = blob.with_name(sha + ".incomplete")
+    return max(size - (part.stat().st_size if part.exists() else 0), 0)
+
+
+def disk_size(path: Path) -> int:
+    """Bytes of the files under path; the snapshot symlinks count nothing."""
+    return sum(p.lstat().st_size for p in path.rglob("*") if p.is_file() and not p.is_symlink())
+
+
 def fetch(repo: str, quant: str, check_disk: bool) -> bool:
     """Put repo:quant in the cache unless it is there already. True when it is
     there afterwards; otherwise the reason is printed."""
@@ -130,13 +158,17 @@ def fetch(repo: str, quant: str, check_disk: bool) -> bool:
         from huggingface_hub import HfApi, hf_hub_download
 
         info = HfApi().model_info(repo, files_metadata=True)
-        sizes = {f.rfilename: f.size or 0 for f in info.siblings or []}
-        names = pick(repo, quant, list(sizes))
+        files = {f.rfilename: f for f in info.siblings or []}
+        names = pick(repo, quant, list(files))
         if check_disk:
-            need, free = sum(sizes[n] for n in names), shutil.disk_usage(CACHE).free
+            need = sum(still_missing(repo, files[n]) for n in names)
+            total, free = sum(files[n].size or 0 for n in names), shutil.disk_usage(CACHE).free
             if need + DISK_MARGIN > free:
-                print(f"preload: {repo}:{quant} SKIPPED — needs {gb(need)} and {gb(DISK_MARGIN)} "
-                      f"left over, {gb(free)} free under {CACHE}", file=sys.stderr)
+                part = f" (of {gb(total)}; the rest is on disk)" if need < total else ""
+                print(f"preload: {repo}:{quant} SKIPPED — needs {gb(need)}{part} and "
+                      f"{gb(DISK_MARGIN)} left over, {gb(free)} free under {CACHE}: "
+                      f"{gb(need + DISK_MARGIN - free)} short. Free that much on the host, "
+                      f"or take it out of ALSO_DOWNLOAD", file=sys.stderr)
                 return False
         for name in names:
             # An interrupted download resumes from what is already on disk.
@@ -152,7 +184,26 @@ def fetch(repo: str, quant: str, check_disk: bool) -> bool:
     return True
 
 
+def prune() -> None:
+    """Delete the models in the cache that neither MODEL nor ALSO_DOWNLOAD
+    names any more, nor served-model — what llama-server runs on right now,
+    which a failed preload can leave behind MODEL. Whole repos: a quant
+    dropped from a repo that stays listed stays too."""
+    keep = {MODEL, *ALSO_DOWNLOAD}
+    if SERVED.is_file():
+        keep.add(SERVED.read_text().strip())
+    dirs = {repo_dir(parse(spec)[0]).name for spec in keep if spec.strip()}
+    for root in sorted(CACHE.glob("models--*")):
+        if root.name in dirs or not root.is_dir():
+            continue
+        size = disk_size(root)
+        shutil.rmtree(root)
+        shutil.rmtree(CACHE / ".locks" / root.name, ignore_errors=True)
+        print(f"preload --also: removed {root.name} ({gb(size)}) — no longer in MODEL or ALSO_DOWNLOAD")
+
+
 def also() -> int:
+    prune()
     served = parse(MODEL)
     specs = list(dict.fromkeys(parse(s) for s in ALSO_DOWNLOAD if s.strip() and parse(s) != served))
     if not specs:

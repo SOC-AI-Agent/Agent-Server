@@ -243,10 +243,18 @@ ahead of time, so switching `MODEL` to one is a restart instead of a multi-GB
 download. Only the production host fetches them: `dall-m-model-extra` is in the
 compose profile `production`, which the deploy job starts last and leaves
 running in the background, and a plain `docker compose up` never starts. It
-skips a model the disk has no room for (keeping 5 GB free). Today the list is
-gemma-3-12b and Qwen2.5-14B, about 16 GB together; `MODEL` itself is
+skips a model the disk has no room for (keeping 5 GB free), counting only what
+is not on disk yet — an interrupted download resumes — and says how much is
+short. Before downloading it deletes from the cache every model neither
+`MODEL` nor `ALSO_DOWNLOAD` names (nor the one llama-server is serving), so
+taking a model off the list frees its space on the next deploy; to keep an old
+`MODEL` around after a change, list it in `ALSO_DOWNLOAD`. The deploy log's
+step 6 shows that run's output and, when a model was skipped for space,
+`docker system df`. Today the list is gemma-3-12b (~7.3 GB); `MODEL` itself is
 Qwen2.5-7B (~4.7 GB), which the first deploy downloads before llama-server
 starts — about half an hour through the office proxy, progress in the log.
+What the host has and where the cache's disk space goes: the `inspect_host`
+job.
 
 If a download fails (no route to Hugging Face, a proxy that refuses, a quant
 the repo does not have) the preload exits with the reason and
