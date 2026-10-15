@@ -23,6 +23,7 @@ from app.module.inference import crud as inference_crud
 from app.module.inference.schemas import InferenceRequestListOut
 from app.module.models import crud as models_crud
 from app.module.models.schemas import LlmModelOut
+from app.module.system import resources as system_resources
 from app.module.users import crud as users_crud
 from app.module.users.schemas import UserCreate, UserOut, UserUpdate
 
@@ -278,3 +279,16 @@ def list_inference_requests(
     items = inference_crud.list_inference_requests(owner_id, agent_id, status_filter, limit, offset)
     total = inference_crud.count_inference_requests(owner_id, agent_id, status_filter)
     return {"items": items, "total": total, "limit": limit, "offset": offset}
+
+
+# ========================================
+# SYSTEM RESOURCES
+# ========================================
+
+@router.get("/system/resources")
+async def get_system_resources(actor: dict = Depends(require_admin)):
+    """The host's CPU, memory, disks and GPUs, the model cache and llama-server's
+    state, for the admin UI's Resources page. Admins only: it describes the
+    machine. Read-only; see app/module/system/resources.py for where each
+    number comes from."""
+    return await system_resources.snapshot()

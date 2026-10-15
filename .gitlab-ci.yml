@@ -7,13 +7,11 @@
 # .env.example, server/Dockerfile, frontend/Dockerfile and docker-compose.yml
 # exactly as they already are.
 #
-# ⚠️ docker-compose.yml has dall-m-server depend on dall-m-llamacpp with
-# `condition: service_healthy`, but dall-m-llamacpp defines no healthcheck.
-# Compose then has nothing to call "healthy", so `docker compose up --wait`
-# can hang rather than proceed. deploy_production bounds that wait so the
-# pipeline fails with a clear reason instead of hanging until the job
-# times out; it is not something this pipeline can fix without editing
-# docker-compose.yml.
+# deploy_production's `docker compose up --wait` (step 1) also waits for
+# dall-m-model-preload: dall-m-llamacpp starts only once MODEL is on disk, and
+# the first deploy after MODEL changes downloads it then — about half an hour
+# for Qwen2.5-7B through the office proxy. That wait is bounded by UP_TIMEOUT,
+# under the job's own timeout, and prints the download's progress meanwhile.
 
 stages:
   - build
@@ -175,9 +173,16 @@ deploy_production:
   # different host than the rest of the SOC stack.
   tags:
     - llm
+  # Room for a first deploy that downloads MODEL (see UP_TIMEOUT). A runner
+  # whose own maximum is lower caps this.
+  timeout: 90m
   variables:
     DOCKER_HOST: unix:///var/run/docker.sock
     DOCKER_TLS_CERTDIR: ""
+    # Seconds `docker compose up --wait` may take, the model download
+    # included: 4.7 GB at the ~2.4 MB/s measured through the office proxy is
+    # ~35 minutes, so this leaves twice that. A CI/CD variable overrides it.
+    UP_TIMEOUT: "4800"
   environment:
     name: production
     # The admin UI — what a person actually opens — at the address step 5
@@ -205,12 +210,12 @@ deploy_production:
     # same way: JWT_EXPIRE_MINUTES, LOG_LEVEL, NEXT_PUBLIC_BASE_PATH,
     # SERVER_HOST_PORT (default 8001, as 8000 is taken on the production host —
     # see .env.example).
-    # AGENT_ADMIN_PASSWORD (+ _USERNAME, _EMAIL) is optional on purpose — see
-    # step 3. The model is not a variable at all: it is chosen at the top of
-    # llamacpp/preload_models.py.
+    # AGENT_ADMIN_PASSWORD is required: step 3 creates the first admin with it
+    # (AGENT_ADMIN_USERNAME optional, default admin). The model is not a
+    # variable at all: it is chosen at the top of llamacpp/preload_models.py.
     - |
       missing=""
-      for key in DB_USER DB_PASSWORD DB_NAME JWT_SECRET \
+      for key in DB_USER DB_PASSWORD DB_NAME JWT_SECRET AGENT_ADMIN_PASSWORD \
                  NEXT_PUBLIC_BASE_URL NEXT_PUBLIC_LLM_BASE_URL; do
         eval "value=\${$key:-}"
         [ -n "$value" ] || missing="$missing $key"
@@ -262,11 +267,35 @@ deploy_production:
       echo "  all free (or this stack's own)"
 
     - echo "========== 1. Build and start =========="
-    # Bounded rather than left to hang: see the note at the top of this file
-    # about dall-m-llamacpp having no healthcheck for dall-m-server to wait on.
+    # One `up` for the whole stack, so that a changed MODEL restarts
+    # dall-m-llamacpp (depends_on ... restart: true — a separate run of the
+    # preload first would not). It includes the preload's download of MODEL,
+    # which on the first deploy after a change takes the better part of an
+    # hour: bounded by UP_TIMEOUT, with the size of the model cache printed
+    # every minute meanwhile so the log shows it moving. Timed out with the
+    # download still running, it carries on in the background; the next
+    # deploy finds it, waits for the rest, and starts llama-server.
     - *proxy
     - docker compose build $PROXY_ARGS
-    - docker compose up -d --wait --wait-timeout 600
+    - |
+      docker compose up -d --wait --wait-timeout "$UP_TIMEOUT" &
+      up=$!
+      while kill -0 "$up" 2>/dev/null; do
+        sleep 60
+        if [ "$(docker inspect -f '{{.State.Running}}' dall-m-model-preload 2>/dev/null)" = true ]; then
+          echo "  downloading MODEL: $(docker exec dall-m-model-preload du -sh /models 2>/dev/null | cut -f1) in the model cache so far"
+        fi
+      done
+      if ! wait "$up"; then
+        if [ "$(docker inspect -f '{{.State.Running}}' dall-m-model-preload 2>/dev/null)" = true ]; then
+          echo "MODEL is still downloading after ${UP_TIMEOUT}s; it carries on in the background."
+          echo "Run this pipeline again later: the deploy waits for it and starts llama-server."
+        fi
+        docker compose logs --tail 20 dall-m-model-preload dall-m-llamacpp
+        exit 1
+      fi
+      # What the preload did this time: downloaded, or found it cached.
+      docker compose logs --no-log-prefix --tail 5 dall-m-model-preload
 
     - echo "========== 2. Database schema =========="
     # Idempotent (CREATE TABLE IF NOT EXISTS, upserts) — safe on every deploy.
@@ -275,9 +304,10 @@ deploy_production:
     # Dockerfile only COPYs app/), so there is nothing in that container to run.
     #
     # The DB_* below are the CI variables themselves (this container gets
-    # script/, not .env). Step 0 guarantees they are set; an empty one would
-    # reach os.getenv() as "set to empty", not "unset", and the scripts would
-    # log in as nobody.
+    # script/, not .env), passed by name: docker takes each value from this
+    # job's environment, so no password is on a command line. Step 0
+    # guarantees they are set; an empty one would reach os.getenv() as "set to
+    # empty", not "unset", and the scripts would log in as nobody.
     #
     # No model name here: insert_default_model.py registers whatever
     # dall-m-llamacpp reports serving (LLM_BASE_URL), which is what
@@ -292,31 +322,29 @@ deploy_production:
       tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
         -e http_proxy -e https_proxy -e no_proxy \
         -e DB_HOST=dall-m-db -e DB_PORT=5432 \
-        -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
+        -e DB_USER -e DB_PASSWORD -e DB_NAME \
         -e LLM_BASE_URL=http://dall-m-llamacpp:8080 \
         python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
           && pip install --no-cache-dir -q -r requirements.txt \
           && python create_db.py && python insert_default_model.py"
 
     - echo "========== 3. Admin user =========="
-    # Only touched when AGENT_ADMIN_PASSWORD is set as a CI variable — this
-    # script upserts on every call, and calling it unconditionally would reset
-    # the admin password to the .env.example default (admin123) on every
-    # deploy. Set it once for the first deploy; leave it unset afterwards.
+    # The first admin, from AGENT_ADMIN_USERNAME (default admin) and
+    # AGENT_ADMIN_PASSWORD, with the email <username>@dall-m.local — created
+    # only when no user of that name exists. Every deploy runs it and
+    # none changes an existing user: a password changed in the admin UI stays
+    # changed, and changing the CI variable later does not change it. Values
+    # by name, as in step 2. The password is stored as plain text — what the
+    # server's login compares against — so not one used anywhere else.
     - |
-      if [ -n "${AGENT_ADMIN_PASSWORD:-}" ]; then
-        # script/ as a tar on stdin, as in step 2.
-        tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
-          -e http_proxy -e https_proxy -e no_proxy \
-          -e DB_HOST=dall-m-db -e DB_PORT=5432 \
-          -e DB_USER="$DB_USER" -e DB_PASSWORD="$DB_PASSWORD" -e DB_NAME="$DB_NAME" \
-          python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
-            && pip install --no-cache-dir -q -r requirements.txt \
-            && python add_admin_user.py --username '${AGENT_ADMIN_USERNAME:-admin}' \
-                 --email '${AGENT_ADMIN_EMAIL:-admin@example.com}' --password '$AGENT_ADMIN_PASSWORD'"
-      else
-        echo "AGENT_ADMIN_PASSWORD not set — admin user left as it is"
-      fi
+      tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
+        -e http_proxy -e https_proxy -e no_proxy \
+        -e DB_HOST=dall-m-db -e DB_PORT=5432 \
+        -e DB_USER -e DB_PASSWORD -e DB_NAME \
+        -e AGENT_ADMIN_USERNAME -e AGENT_ADMIN_PASSWORD \
+        python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
+          && pip install --no-cache-dir -q -r requirements.txt \
+          && python add_admin_user.py --if-missing"
 
     - echo "========== 4. Health =========="
     - |
@@ -390,3 +418,24 @@ deploy_production:
       echo "not created by this pipeline — create or update them by hand at the"
       echo "admin UI above or POST /restful/agents, the same way a first admin is"
       echo "provisioned by hand elsewhere in this stack."
+
+    - echo "========== 6. Other models (in the background) =========="
+    # ALSO_DOWNLOAD in llamacpp/preload_models.py, fetched ahead so that
+    # switching MODEL to one of them is a restart, not a download. Started here,
+    # last, once everything else is up and checked, and left running: through
+    # the office proxy the first time takes hours, and nothing waits on it. A
+    # deploy that finds it still downloading leaves it be (same image); a
+    # finished one checks the cache and stops in seconds. Only here: the
+    # service is in the "production" profile, so a laptop never starts it.
+    # What it says in its first seconds is shown below — which models are
+    # cached, which are downloading, which were skipped for disk space. The
+    # next deploy shows the state again. Not a reason to fail the deploy: the
+    # stack is up and checked by now.
+    - |
+      if docker compose --profile production build $PROXY_ARGS dall-m-model-extra \
+         && docker compose --profile production up -d dall-m-model-extra; then
+        sleep 20
+        docker compose --profile production logs --no-log-prefix --tail 20 dall-m-model-extra
+      else
+        echo "the background download did not start (see above); the stack itself is up"
+      fi

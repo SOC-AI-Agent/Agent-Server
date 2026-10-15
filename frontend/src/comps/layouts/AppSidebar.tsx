@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
-import { IconHistory, IconLogout, IconRobot, IconUsers } from "@tabler/icons-react";
+import { IconHistory, IconLogout, IconRobot, IconServer, IconUsers } from "@tabler/icons-react";
 import { clearAuth, useCurrentUser } from "@/utils/authToken";
 
 interface NavItem {
@@ -126,6 +126,7 @@ export function AppSidebar() {
                       label: "Management",
                       items: [
                           { id: "users", label: "Users", route: "/users", icon: <IconUsers size={18} stroke={1.8} /> },
+                          { id: "system", label: "Resources", route: "/system", icon: <IconServer size={18} stroke={1.8} /> },
                       ],
                   },
               ]

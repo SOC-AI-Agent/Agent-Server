@@ -233,17 +233,20 @@ history keeps the old name.
 ### Preloading models
 
 `dall-m-model-preload` runs once per `docker compose up`, before
-`dall-m-llamacpp`, and downloads `MODEL` plus any listed in `ALSO_DOWNLOAD`
-(same file, same `<repo>[:quant]` format) into `./data/models`, skipping what
-is already there — a rerun with nothing missing makes no network call.
+`dall-m-llamacpp`, and downloads `MODEL` into `./data/models`, skipping it when
+it is already there — a rerun with nothing missing makes no network call.
 For each model it takes the `.gguf` whose name carries the quant (`Q4_K_M`
 when none is given) and every shard of it, the same file `-hf` would pick.
-Downloading a model you might switch to ahead of time makes the switch a
-restart instead of a multi-GB download:
 
-```python
-ALSO_DOWNLOAD = ["Qwen/Qwen2.5-7B-Instruct-GGUF:Q4_K_M"]
-```
+`ALSO_DOWNLOAD` (same file, same `<repo>[:quant]` format) lists models fetched
+ahead of time, so switching `MODEL` to one is a restart instead of a multi-GB
+download. Only the production host fetches them: `dall-m-model-extra` is in the
+compose profile `production`, which the deploy job starts last and leaves
+running in the background, and a plain `docker compose up` never starts. It
+skips a model the disk has no room for (keeping 5 GB free). Today the list is
+gemma-3-12b and Qwen2.5-14B, about 16 GB together; `MODEL` itself is
+Qwen2.5-7B (~4.7 GB), which the first deploy downloads before llama-server
+starts — about half an hour through the office proxy, progress in the log.
 
 If a download fails (no route to Hugging Face, a proxy that refuses, a quant
 the repo does not have) the preload exits with the reason and

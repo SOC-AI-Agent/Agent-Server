@@ -38,9 +38,14 @@ services:
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
       LLM_BASE_URL: http://dall-m-llamacpp:8080
+      # The model cache, read only, for the admin UI's Resources page: what is
+      # downloaded, how big, which one is served, and the disk it is on.
+      MODELS_DIR: /models
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    volumes:
+      - ./data/models:/models:ro
     depends_on:
       dall-m-db:
         condition: service_healthy
@@ -89,6 +94,31 @@ services:
       # (restart: true below) would restart each time instead of only when
       # the model changes.
       provenance: false
+    restart: "no"
+    volumes:
+      - ./data/models:/models
+    environment:
+      LLAMA_CACHE: /models
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+    networks:
+      - dall-m-net
+
+  # Production only — profile "production", which only the deploy job turns
+  # on, last and in the background: the models in ALSO_DOWNLOAD
+  # (llamacpp/preload_models.py --also) into the same cache, each only if the
+  # disk has room, so switching MODEL to one of them is a restart rather than
+  # a download. Hours through the office proxy the first time, so nothing
+  # waits on it; a deploy that finds it still running leaves it to finish.
+  dall-m-model-extra:
+    container_name: dall-m-model-extra
+    profiles: [production]
+    build:
+      context: ./llamacpp
+      dockerfile: Dockerfile.preload
+      provenance: false
+    command: ["--also"]
     restart: "no"
     volumes:
       - ./data/models:/models
