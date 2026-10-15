@@ -164,6 +164,84 @@ inspect_ports:
   script:
     - sh script/inspect-ports.sh
 
+# When the admin UI will not let someone in. Press ▶ after a failed attempt:
+#   - the users there are: names and flags, never passwords
+#   - whether AGENT_ADMIN_USERNAME / AGENT_ADMIN_PASSWORD log in
+#   - the login attempts the server saw in the last 24 hours, and why each
+#     failed (unknown user / wrong password). None at all means the browser's
+#     request never reached the API: the address below, or a firewall.
+#   - the API address the running admin UI calls (NEXT_PUBLIC_BASE_URL)
+# Reads only, apart from that one login of its own.
+check_admin_login:
+  stage: inspect
+  image: docker:latest
+  tags:
+    - llm
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_TLS_CERTDIR: ""
+  environment:
+    name: production
+    action: access
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_REF_PROTECTED == "true"'
+      when: manual
+      allow_failure: true
+  script:
+    - |
+      echo "== Users (no passwords) =="
+      docker exec dall-m-db psql -U "$DB_USER" -d "$DB_NAME" -P pager=off \
+        -c "SELECT username, email, is_admin, is_active, created_at FROM users ORDER BY created_at;"
+
+      echo "== Logging in as ${AGENT_ADMIN_USERNAME:-admin} with AGENT_ADMIN_PASSWORD =="
+      tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
+        -e http_proxy -e https_proxy -e no_proxy -e AGENT_ADMIN_USERNAME -e AGENT_ADMIN_PASSWORD \
+        python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
+          && pip install --no-cache-dir -q -r requirements.txt \
+          && python add_admin_user.py --check-only --check-login http://dall-m-server:8000"
+
+      echo "== Login attempts the server logged (last 24 hours) =="
+      attempts=$(docker logs --since 24h dall-m-server 2>&1 | grep -E 'login\.(success|failed)' | tail -n 20 || true)
+      if [ -n "$attempts" ]; then echo "$attempts"
+      else echo "(none — no login reached the API: check the address below, and the firewall)"; fi
+
+      echo "== The API the running admin UI calls =="
+      docker inspect -f '{{range .Config.Env}}{{println .}}{{end}}' dall-m-frontend | grep '^NEXT_PUBLIC_' || true
+      echo "It must be http://<this host's address>:8001, reachable from the browser too."
+
+# Sets the password of AGENT_ADMIN_USERNAME (default admin) to
+# AGENT_ADMIN_PASSWORD — creating the user, as an admin, if there is none —
+# then logs in with it. For when check_admin_login says the variable's
+# password does not log in (the user was made earlier with another one).
+# Changes the database, so a button (▶) only, never run by itself.
+reset_admin_password:
+  stage: inspect
+  image: docker:latest
+  tags:
+    - llm
+  variables:
+    DOCKER_HOST: unix:///var/run/docker.sock
+    DOCKER_TLS_CERTDIR: ""
+  environment:
+    name: production
+    action: access
+  needs: []
+  rules:
+    - if: '$CI_COMMIT_REF_PROTECTED == "true"'
+      when: manual
+      allow_failure: true
+  script:
+    - |
+      : "${AGENT_ADMIN_PASSWORD:?set the CI variable AGENT_ADMIN_PASSWORD first}"
+      tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
+        -e http_proxy -e https_proxy -e no_proxy \
+        -e DB_HOST=dall-m-db -e DB_PORT=5432 -e DB_USER -e DB_PASSWORD -e DB_NAME \
+        -e AGENT_ADMIN_USERNAME -e AGENT_ADMIN_PASSWORD \
+        python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
+          && pip install --no-cache-dir -q -r requirements.txt \
+          && python add_admin_user.py --check-login http://dall-m-server:8000"
+
 deploy_production:
   stage: deploy
   image: docker:latest
@@ -336,6 +414,9 @@ deploy_production:
     # changed, and changing the CI variable later does not change it. Values
     # by name, as in step 2. The password is stored as plain text — what the
     # server's login compares against — so not one used anywhere else.
+    # Then it logs in with them, as the admin UI would, and says whether that
+    # works: "does NOT log in" means the user was made earlier with another
+    # password (check_admin_login below shows which).
     - |
       tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
         -e http_proxy -e https_proxy -e no_proxy \
@@ -344,7 +425,7 @@ deploy_production:
         -e AGENT_ADMIN_USERNAME -e AGENT_ADMIN_PASSWORD \
         python:3.12-slim sh -c "mkdir /script && cd /script && tar -xf - \
           && pip install --no-cache-dir -q -r requirements.txt \
-          && python add_admin_user.py --if-missing"
+          && python add_admin_user.py --if-missing --check-login http://dall-m-server:8000"
 
     - echo "========== 4. Health =========="
     - |
