@@ -189,6 +189,9 @@ check_admin_login:
       when: manual
       allow_failure: true
   script:
+    # The office proxy, for the pip install inside the container (the login
+    # itself goes to dall-m-server directly, never through it).
+    - *proxy
     - |
       echo "== Users (no passwords) =="
       docker exec dall-m-db psql -U "$DB_USER" -d "$DB_NAME" -P pager=off \
@@ -232,6 +235,9 @@ reset_admin_password:
       when: manual
       allow_failure: true
   script:
+    # The office proxy, for the pip install inside the container (the login
+    # itself goes to dall-m-server directly, never through it).
+    - *proxy
     - |
       : "${AGENT_ADMIN_PASSWORD:?set the CI variable AGENT_ADMIN_PASSWORD first}"
       tar -C script -cf - . | docker run --rm -i --network agent-server_dall-m-net \
