@@ -22,7 +22,7 @@ from app.module.auth.security import create_access_token
 from app.module.inference import crud as inference_crud
 from app.module.inference.schemas import InferenceRequestListOut
 from app.module.models import crud as models_crud
-from app.module.models.schemas import LlmModelCreate, LlmModelOut
+from app.module.models.schemas import LlmModelCreate, LlmModelOut, LlmModelUpdate
 from app.module.system import resources as system_resources
 from app.module.users import crud as users_crud
 from app.module.users.schemas import UserCreate, UserOut, UserUpdate
@@ -133,6 +133,25 @@ def get_model(model_id: UUID):
 def upsert_model(payload: LlmModelCreate, actor: dict = Depends(require_admin)):
     model = models_crud.upsert_model(payload.name, payload.model_name, payload.provider, payload.is_active)
     _audit(actor, "model.upsert", id=model["id"], model_name=model["model_name"], provider=model["provider"])
+    return model
+
+
+@router.put("/models/{model_id}", response_model=LlmModelOut)
+def update_model(model_id: UUID, payload: LlmModelUpdate, actor: dict = Depends(require_admin)):
+    if payload.model_name is not None:
+        existing = [m for m in models_crud.list_models() if m["model_name"] == payload.model_name and m["id"] != model_id]
+        if existing:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Model ID already exists")
+    model = models_crud.update_model(
+        model_id,
+        name=payload.name,
+        model_name=payload.model_name,
+        provider=payload.provider,
+        is_active=payload.is_active,
+    )
+    if model is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    _audit(actor, "model.update", id=model["id"], model_name=model["model_name"], provider=model["provider"])
     return model
 
 

@@ -12,6 +12,13 @@ class LlmModelCreate(BaseModel):
     is_active: bool = True
 
 
+class LlmModelUpdate(BaseModel):
+    name: Optional[str] = None
+    model_name: Optional[str] = None
+    provider: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class LlmModelOut(BaseModel):
     id: UUID
     name: str

@@ -47,6 +47,7 @@ import { paramNotes } from "@/comps/agents/paramNotes";
 import { AutoGrowTextarea } from "@/comps/agents/AutoGrowTextarea";
 import { AgentInvokePanel } from "@/comps/agents/AgentInvokePanel";
 import { getErrorMessage } from "@/utils/errorMessage";
+import { useCurrentUser } from "@/utils/authToken";
 
 function SectionTitle({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {
     return (
@@ -101,6 +102,7 @@ function formatDate(iso: string): string {
 function AgentDetailContent({ agentId }: { agentId: string }) {
     const router = useRouter();
     const { showNotification } = useNotification();
+    const currentUser = useCurrentUser();
 
     const [agent, setAgent] = useState<AgentOut | null>(null);
     const [prompts, setPrompts] = useState<AgentPromptOut[]>([]);
@@ -393,14 +395,23 @@ function AgentDetailContent({ agentId }: { agentId: string }) {
                             </label>
                             <div className="grid grid-cols-2 gap-4">
                                 <label className={labelClass}>
-                                    Model
+                                    <span className="flex items-center justify-between gap-2">
+                                        <span>Model</span>
+                                        {currentUser?.is_admin && (
+                                            <Link href="/models" className="text-[11px] font-normal text-[#34d399] hover:underline">
+                                                + เพิ่ม / แก้ไข Model
+                                            </Link>
+                                        )}
+                                    </span>
                                     <select className={inputClass} value={modelId} onChange={(e) => setModelId(e.target.value)}>
                                         <option value="">ไม่ระบุ</option>
-                                        {models.map((m) => (
-                                            <option key={m.id} value={m.id}>
-                                                {m.name === m.model_name ? m.name : `${m.name} (${m.model_name})`}
-                                            </option>
-                                        ))}
+                                        {models
+                                            .filter((m) => m.is_active || m.id === modelId)
+                                            .map((m) => (
+                                                <option key={m.id} value={m.id}>
+                                                    {m.name === m.model_name ? m.name : `${m.name} (${m.model_name})`}
+                                                </option>
+                                            ))}
                                     </select>
                                 </label>
                                 <label className={labelClass}>

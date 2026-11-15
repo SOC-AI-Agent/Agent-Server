@@ -26,6 +26,20 @@ export interface LlmModelOut {
     updated_at: string;
 }
 
+export interface LlmModelCreate {
+    name: string;
+    model_name: string;
+    provider?: string | null;
+    is_active?: boolean;
+}
+
+export interface LlmModelUpdate {
+    name?: string;
+    model_name?: string;
+    provider?: string | null;
+    is_active?: boolean;
+}
+
 export interface AgentConfigIn {
     temperature?: number | null;
     max_tokens?: number | null;

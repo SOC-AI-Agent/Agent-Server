@@ -44,7 +44,43 @@ def upsert_model(name: str, model_name: str, provider: Optional[str], is_active:
         return cur.fetchone()
 
 
+def update_model(
+    model_id: UUID,
+    name: Optional[str] = None,
+    model_name: Optional[str] = None,
+    provider: Optional[str] = None,
+    is_active: Optional[bool] = None,
+) -> Optional[dict]:
+    fields = []
+    values = []
+    if name is not None:
+        fields.append("name = %s")
+        values.append(name)
+    if model_name is not None:
+        fields.append("model_name = %s")
+        values.append(model_name)
+    if provider is not None:
+        fields.append("provider = %s")
+        values.append(provider)
+    if is_active is not None:
+        fields.append("is_active = %s")
+        values.append(is_active)
+
+    if not fields:
+        return get_model(model_id)
+
+    fields.append("updated_at = now()")
+    values.append(str(model_id))
+    with get_cursor(commit=True) as cur:
+        cur.execute(
+            f"UPDATE llm_models SET {', '.join(fields)} WHERE id = %s RETURNING {MODEL_COLUMNS};",
+            tuple(values),
+        )
+        return cur.fetchone()
+
+
 def delete_model(model_id: UUID) -> bool:
     with get_cursor(commit=True) as cur:
+        cur.execute("UPDATE agents SET model_id = NULL, updated_at = now() WHERE model_id = %s;", (str(model_id),))
         cur.execute("DELETE FROM llm_models WHERE id = %s;", (str(model_id),))
         return cur.rowcount > 0

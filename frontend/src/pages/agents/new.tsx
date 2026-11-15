@@ -174,14 +174,23 @@ function NewAgentPageContent() {
                                     </div>
                                 </label>
                                 <label className={labelClass}>
-                                    Model
+                                    <span className="flex items-center justify-between gap-2">
+                                        <span>Model</span>
+                                        {currentUser?.is_admin && (
+                                            <Link href="/models" className="text-[11px] font-normal text-[#34d399] hover:underline">
+                                                + เพิ่ม / แก้ไข Model
+                                            </Link>
+                                        )}
+                                    </span>
                                     <select className={inputClass} value={modelId} onChange={(e) => setModelId(e.target.value)}>
                                         <option value="">ไม่ระบุ</option>
-                                        {models.map((m) => (
-                                            <option key={m.id} value={m.id}>
-                                                {m.name === m.model_name ? m.name : `${m.name} (${m.model_name})`}
-                                            </option>
-                                        ))}
+                                        {models
+                                            .filter((m) => m.is_active || m.id === modelId)
+                                            .map((m) => (
+                                                <option key={m.id} value={m.id}>
+                                                    {m.name === m.model_name ? m.name : `${m.name} (${m.model_name})`}
+                                                </option>
+                                            ))}
                                     </select>
                                 </label>
                             </div>
