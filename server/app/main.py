@@ -4,6 +4,7 @@ import time
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.module.agent.builtin import ensure_builtin_agents
 from app.module.logs import setup_logging
 from app.routers import agent_invoke, restful, sse
 
@@ -47,6 +48,12 @@ async def log_requests(request: Request, call_next):
     user = getattr(request.state, "username", "-")
     log.log(level, "%s %s -> %d %dms user=%s client=%s", request.method, path, response.status_code, ms, user, client)
     return response
+
+
+@app.on_event("startup")
+def _builtin_agents():
+    # soc-spl-writer always exists; a fresh database gets it on the first agent listing instead.
+    ensure_builtin_agents()
 
 
 app.include_router(sse.router)

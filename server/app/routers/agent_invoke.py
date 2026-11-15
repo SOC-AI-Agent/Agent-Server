@@ -7,7 +7,7 @@ import httpx
 from fastapi import APIRouter, HTTPException, status
 from fastapi.responses import StreamingResponse
 
-from app.module.agent import crud as agent_crud
+from app.module.agent import builtin, crud as agent_crud
 from app.module.agent.schemas import AgentChatRequest, AgentChatResponse
 from app.module.inference import crud as inference_crud
 from app.module.llm.client import get_chat, stream_chat
@@ -48,6 +48,9 @@ def _build_gen_params(config: Optional[dict]) -> dict[str, Any]:
 
 def _resolve(slug: str, version: Optional[int]):
     agent = agent_crud.get_agent_by_slug(slug)
+    if agent is None and builtin.is_builtin(slug):
+        builtin.ensure_builtin_agents()
+        agent = agent_crud.get_agent_by_slug(slug)
     if agent is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     if not agent["is_active"]:

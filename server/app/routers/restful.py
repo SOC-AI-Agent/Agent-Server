@@ -5,7 +5,7 @@ from uuid import UUID
 import psycopg2
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.module.agent import crud as agent_crud
+from app.module.agent import builtin, crud as agent_crud
 from app.module.agent.schemas import (
     AgentConfigIn,
     AgentConfigOut,
@@ -168,6 +168,7 @@ def delete_model(model_id: UUID, actor: dict = Depends(require_admin)):
 
 @router.get("/agents", response_model=List[AgentOut])
 def list_agents(owner_id: Optional[UUID] = None):
+    builtin.ensure_builtin_agents()
     return agent_crud.list_agents(owner_id)
 
 
@@ -194,6 +195,14 @@ def create_agent(payload: AgentCreate, actor: dict = Depends(get_current_user)):
 
 @router.put("/agents/{agent_id}", response_model=AgentOut)
 def update_agent(agent_id: UUID, payload: AgentUpdate, actor: dict = Depends(get_current_user)):
+    current = agent_crud.get_agent(agent_id)
+    if current is not None and builtin.is_builtin(current["slug"]):
+        # The SOC platform calls it by this slug; its model and description stay editable.
+        if (payload.slug is not None and payload.slug != current["slug"]) or payload.is_active is False:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"{current['slug']} is a built-in agent: it cannot be renamed or switched off",
+            )
     try:
         agent = agent_crud.update_agent(agent_id, payload)
     except psycopg2.errors.UniqueViolation:
@@ -209,6 +218,11 @@ def update_agent(agent_id: UUID, payload: AgentUpdate, actor: dict = Depends(get
 @router.delete("/agents/{agent_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_agent(agent_id: UUID, actor: dict = Depends(get_current_user)):
     agent = agent_crud.get_agent(agent_id)
+    if agent is not None and builtin.is_builtin(agent["slug"]):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{agent['slug']} is a built-in agent: it cannot be deleted",
+        )
     if agent is None or not agent_crud.delete_agent(agent_id):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Agent not found")
     _audit(actor, "agent.delete", id=agent_id, slug=agent["slug"], name=repr(agent["name"]))
