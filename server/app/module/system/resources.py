@@ -124,17 +124,31 @@ def _models() -> dict[str, Any]:
     return {"available": MODELS_DIR.is_dir(), "served": served, "items": items}
 
 
+from app.module.llm.client import LLM_API_KEY, auth_headers, endpoint_url
+
+
 async def _llm() -> dict[str, Any]:
-    """llama-server's own word: ok when a model is loaded, loading while it
-    reads one into memory, down when it does not answer."""
-    async with httpx.AsyncClient(timeout=3) as client:
+    """Check local llama-server (/health + /v1/models) or external OpenAI-compatible API (/models)."""
+    headers = auth_headers()
+    async with httpx.AsyncClient(timeout=5) as client:
+        if LLM_API_KEY:
+            try:
+                resp = await client.get(endpoint_url("v1/models"), headers=headers)
+                if resp.status_code == 200:
+                    data = resp.json().get("data") or []
+                    model = data[0]["id"] if data else LLM_BASE_URL
+                    return {"status": "ok", "model": model}
+                return {"status": "down", "model": None}
+            except (httpx.HTTPError, ValueError, KeyError, IndexError):
+                return {"status": "down", "model": None}
+
         try:
             health = await client.get(f"{LLM_BASE_URL}/health")
         except httpx.HTTPError:
             return {"status": "down", "model": None}
         model = None
         try:
-            models = (await client.get(f"{LLM_BASE_URL}/v1/models")).json()
+            models = (await client.get(endpoint_url("v1/models"))).json()
             model = models["data"][0]["id"]
         except (httpx.HTTPError, ValueError, KeyError, IndexError):
             pass

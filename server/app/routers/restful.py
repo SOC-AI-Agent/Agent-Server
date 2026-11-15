@@ -22,7 +22,7 @@ from app.module.auth.security import create_access_token
 from app.module.inference import crud as inference_crud
 from app.module.inference.schemas import InferenceRequestListOut
 from app.module.models import crud as models_crud
-from app.module.models.schemas import LlmModelOut
+from app.module.models.schemas import LlmModelCreate, LlmModelOut
 from app.module.system import resources as system_resources
 from app.module.users import crud as users_crud
 from app.module.users.schemas import UserCreate, UserOut, UserUpdate
@@ -127,6 +127,20 @@ def get_model(model_id: UUID):
     if model is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
     return model
+
+
+@router.post("/models", response_model=LlmModelOut, status_code=status.HTTP_201_CREATED)
+def upsert_model(payload: LlmModelCreate, actor: dict = Depends(require_admin)):
+    model = models_crud.upsert_model(payload.name, payload.model_name, payload.provider, payload.is_active)
+    _audit(actor, "model.upsert", id=model["id"], model_name=model["model_name"], provider=model["provider"])
+    return model
+
+
+@router.delete("/models/{model_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_model(model_id: UUID, actor: dict = Depends(require_admin)):
+    if not models_crud.delete_model(model_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model not found")
+    _audit(actor, "model.delete", id=model_id)
 
 
 # ========================================
