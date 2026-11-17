@@ -37,19 +37,13 @@ services:
       DB_USER: ${DB_USER}
       DB_PASSWORD: ${DB_PASSWORD}
       DB_NAME: ${DB_NAME}
-      LLM_BASE_URL: http://dall-m-llamacpp:8080
-      # The model cache, read only, for the admin UI's Resources page: what is
-      # downloaded, how big, which one is served, and the disk it is on.
-      MODELS_DIR: /models
+      LLM_BASE_URL: ${LLM_BASE_URL}
+      LLM_API_KEY: ${LLM_API_KEY:-}
       JWT_SECRET: ${JWT_SECRET:-dev-secret-change-me}
       JWT_EXPIRE_MINUTES: ${JWT_EXPIRE_MINUTES:-1440}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
-    volumes:
-      - ./data/models:/models:ro
     depends_on:
       dall-m-db:
-        condition: service_healthy
-      dall-m-llamacpp:
         condition: service_healthy
     networks:
       - dall-m-net
@@ -73,103 +67,6 @@ services:
       - dall-m-server
     networks:
       - dall-m-net
-
-  # One-shot, before dall-m-llamacpp: downloads the model it serves and any
-  # others listed into ./data/models, skipping what is already there, and
-  # writes the served one's name to ./data/models/served-model. Which model is
-  # chosen at the top of llamacpp/preload_models.py, nowhere else; it is built
-  # into this image, so changing it is a rebuild. dall-m-llamacpp then
-  # starts --offline and reads only that cache. The download is Python's
-  # huggingface_hub, not llama-server's own, because llama-server ignores
-  # HTTPS_PROXY and the production host reaches Hugging Face only through the
-  # office proxy: the deploy job exports it, a laptop leaves it empty and goes
-  # direct. A rerun with nothing missing makes no network call.
-  dall-m-model-preload:
-    container_name: dall-m-model-preload
-    build:
-      context: ./llamacpp
-      dockerfile: Dockerfile.preload
-      # No provenance attestation: it carries the build time, so every deploy
-      # would make a new image even with nothing changed, and dall-m-llamacpp
-      # (restart: true below) would restart each time instead of only when
-      # the model changes.
-      provenance: false
-    restart: "no"
-    volumes:
-      - ./data/models:/models
-    environment:
-      LLAMA_CACHE: /models
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-}
-    networks:
-      - dall-m-net
-
-  # Production only — profile "production", which only the deploy job turns
-  # on, last and in the background: the models in ALSO_DOWNLOAD
-  # (llamacpp/preload_models.py --also) into the same cache, each only if the
-  # disk has room, so switching MODEL to one of them is a restart rather than
-  # a download. Hours through the office proxy the first time, so nothing
-  # waits on it; a deploy that finds it still running leaves it to finish.
-  dall-m-model-extra:
-    container_name: dall-m-model-extra
-    profiles: [production]
-    build:
-      context: ./llamacpp
-      dockerfile: Dockerfile.preload
-      provenance: false
-    command: ["--also"]
-    restart: "no"
-    volumes:
-      - ./data/models:/models
-    environment:
-      LLAMA_CACHE: /models
-      HTTPS_PROXY: ${HTTPS_PROXY:-}
-      HTTP_PROXY: ${HTTP_PROXY:-}
-      NO_PROXY: ${NO_PROXY:-}
-    networks:
-      - dall-m-net
-
-  dall-m-llamacpp:
-    container_name: dall-m-llamacpp
-    image: ghcr.io/ggml-org/llama.cpp:server
-    restart: unless-stopped
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./data/models:/models
-    environment:
-      LLAMA_CACHE: /models
-    # -hf: the model dall-m-model-preload wrote to served-model, read at each
-    # start through a shell (the image's own entrypoint is llama-server, which
-    # cannot read a file for an argument). exec keeps llama-server PID 1, so
-    # it gets the stop signal itself.
-    # --offline: serve only what dall-m-model-preload put in the cache, never
-    # download here (this downloader cannot use the office proxy).
-    # --no-mmproj: the agents send text only, so no vision projector is needed
-    # or downloaded.
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - exec /app/llama-server -hf "$$(cat /models/served-model)" --offline --no-mmproj --host 0.0.0.0 --port 8080
-    depends_on:
-      # restart: true — when the preload is rebuilt (the model changed), this
-      # is restarted after it, onto the new served-model. A deploy that
-      # changes nothing leaves it running.
-      dall-m-model-preload:
-        condition: service_completed_successfully
-        restart: true
-    networks:
-      - dall-m-net
-    # Serves only this one model at a time — dall-m-server's LLM_BASE_URL points
-    # at one fixed host:port. To serve a second model concurrently rather than
-    # switching by recreating this container: copy this block (new
-    # container_name, a second host port, and its own -hf rather than
-    # served-model), then give
-    # dall-m-server a way to pick which of the two to call per agent — today it
-    # has exactly one LLM_BASE_URL, so that part is still a real change, not
-    # just a compose addition. Both instances would read the same
-    # ./data/models volume, so neither downloads what the other already has.
-
 
 networks:
   dall-m-net:
